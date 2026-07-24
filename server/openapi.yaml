@@ -1,0 +1,447 @@
+openapi: 3.0.3
+
+info:
+  title: Hermes Relay API
+  version: 0.3.0
+  description: |
+    Relay for `HermesDelegateV1.execute` batches on EIP-7702 delegated EOAs (ERC-7821 signed
+    opData path).
+
+    Flow: `POST /routes` (fee preview across tokens) → `POST /emulate` (exact token, get the
+    batch(es) to sign) → sign each `sign.*.typedData` with `eth_signTypedData_v4` → `POST /send`.
+
+    `type` picks the sponsorship model, and for gasless `path` picks the delivery mechanism:
+    - `type=battery` — full sponsorship: the relay calls the user account directly with one atomic
+      user batch. No on-chain fee (charged off-chain in virtual currency).
+    - `type=gasless, path=direct` — one signed try-batch [fee REQUIRED, …user BREAK_ON_FAIL] sent
+      straight to the user account. Cheapest; the relay needs no delegation.
+    - `type=gasless, path=delegate` — the relay is itself 7702-delegated and proxies two signed
+      batches via a self-call try-batch [userAcc.execute(fee) REQUIRED, userAcc.execute(user)
+      OPTIONAL]. The fee is always collected; a failing user batch still commits.
+    - `type=gasless, path=paymaster` — ERC-4337 EntryPoint + paymaster: NOT yet supported.
+
+    In every gasless path the fee is an ERC20 `transfer(relay, amount)`; a failing user batch never
+    reverts the collected fee.
+
+servers:
+  - url: http://127.0.0.1:8787
+
+tags:
+  - name: relay
+
+paths:
+  /routes:
+    post:
+      tags: [relay]
+      operationId: routes
+      summary: Preview the gasless fee across every accepted ERC20 token
+      description: |
+        Emulates the full gasless proxy once (using a representative token) and reprices the
+        resulting gas across every accepted fee token by its hardcoded rate. Returns no signable
+        calldata — it is a quote preview to let the user pick a token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RoutesRequest" }
+            examples:
+              basic:
+                value:
+                  chain: eth
+                  from: "0xA6c781E4e73546a8BA5A971663a2341D38b49e5e"
+                  payloads:
+                    - to: "0x1111111254EEB25477B68fb85Ed929f73A960582"
+                      value: "0"
+                      data: "0xdeadbeef"
+      responses:
+        "200":
+          description: Per-token fee preview.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoutesResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /emulate:
+    post:
+      tags: [relay]
+      operationId: emulate
+      summary: Quote an exact token and return the batch(es) to sign
+      description: |
+        gasless: mixes in the exact ERC20 `transfer(relay, amount)` fee call (the token is now
+        known) and returns two signable artifacts — `sign.fee` (nonce N) and `sign.user`
+        (nonce N+1). battery: returns only `sign.user`; the fee is virtual.
+
+        Gas tiers (`gas.source`): `estimateGas` (node-priced with overrides), `gasMeter` (gasleft()
+        probe inside eth_call, for nodes that reject overrides on estimateGas), `heuristic`.
+        `gas.estimated` includes the EIP-7702 authorization surcharge when the account still needs
+        delegation (`account.requiresAuthorization`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmulateRequest" }
+            examples:
+              gasless:
+                value:
+                  type: gasless
+                  chain: eth
+                  asset: eth/mainnet/erc20/0xdAC17F958D2ee523a2206206994597C13D831ec7
+                  from: "0xA6c781E4e73546a8BA5A971663a2341D38b49e5e"
+                  payloads:
+                    - to: "0x1111111254EEB25477B68fb85Ed929f73A960582"
+                      value: "0"
+                      data: "0xdeadbeef"
+              battery:
+                value:
+                  type: battery
+                  chain: eth
+                  from: "0xA6c781E4e73546a8BA5A971663a2341D38b49e5e"
+                  payloads:
+                    - to: "0x1111111254EEB25477B68fb85Ed929f73A960582"
+                      value: "0"
+                      data: "0xdeadbeef"
+      responses:
+        "200":
+          description: Fee quote and the artifact(s) to sign.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmulateResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /send:
+    post:
+      tags: [relay]
+      operationId: send
+      summary: Broadcast the signed batch(es) through the relay
+      description: |
+        Echo the `uuid` from /emulate, the signed artifact(s) (`user`, plus `fee` for gasless), and
+        — when the account is not yet delegated — the signed EIP-7702 `authorization`. For each
+        artifact the relay re-hashes the echoed typed data, requires it to equal the digest quoted
+        for the uuid, and requires the signature to recover to the account. It then broadcasts:
+        battery → a direct call to the user account; gasless → the relay self-call proxy (after
+        one-time self-delegation). A successful broadcast consumes the uuid.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SendRequest" }
+      responses:
+        "200":
+          description: Transaction accepted by the node.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SendResponse" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  responses:
+    NotFound:
+      description: Unknown chain.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadRequest:
+      description: >-
+        Validation/policy failure, unsupported fee token, expired/spent/unknown uuid, a signed
+        artifact that does not match the quote, missing authorization for an undelegated account,
+        or the node rejected the broadcast.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    ChainSlug:
+      type: string
+      enum: [eth, bsc, arb, base, local]
+      description: "Aliases accepted: ethereum/mainnet→eth, bnb→bsc, arbitrum→arb, localhost/hardhat→local."
+
+    Address:
+      type: string
+      pattern: "^0x[0-9a-fA-F]{40}$"
+      example: "0xdAC17F958D2ee523a2206206994597C13D831ec7"
+
+    HexData:
+      type: string
+      description: 0x-prefixed hex byte string (may be `0x`).
+      pattern: "^0x([0-9a-fA-F]{2})*$"
+
+    Bytes32:
+      type: string
+      pattern: "^0x[0-9a-fA-F]{64}$"
+
+    Uint256:
+      type: string
+      description: Unsigned integer as a decimal string (0x-hex also accepted in requests).
+      example: "0"
+
+    Mode:
+      allOf: [{ $ref: "#/components/schemas/Bytes32" }]
+      description: |
+        ERC-7821 mode. The user's fee & user batches are the atomic opData mode
+        (`0x0100…7821 0001…`). The gasless proxy (relay self-call, server-built, not user-signed) is
+        the try mode, no opData, with the packed 2-bit per-call policies in the payload — call 0
+        REQUIRED (`01`), call 1 OPTIONAL (`00`) → payload `…0001`.
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: "token 0x… is not an accepted fee token on eth" }
+
+    NativeCurrency:
+      type: object
+      required: [symbol, decimals]
+      properties:
+        symbol: { type: string, example: ETH }
+        decimals: { type: integer, example: 18 }
+
+    InputCall:
+      type: object
+      description: One call the user wants executed. `data`/`value` optional.
+      required: [to]
+      properties:
+        to: { $ref: "#/components/schemas/Address" }
+        value: { allOf: [{ $ref: "#/components/schemas/Uint256" }], description: "Wei; default 0." }
+        data: { allOf: [{ $ref: "#/components/schemas/HexData" }], description: "Calldata; default 0x." }
+
+    Call:
+      type: object
+      description: A batch call inside a signed typedData.message (Call struct).
+      required: [target, value, data]
+      properties:
+        target: { $ref: "#/components/schemas/Address" }
+        value: { $ref: "#/components/schemas/Uint256" }
+        data: { $ref: "#/components/schemas/HexData" }
+
+    FeeAsset:
+      type: object
+      required: [kind]
+      properties:
+        kind: { type: string, enum: [erc20, native] }
+        address: { allOf: [{ $ref: "#/components/schemas/Address" }], description: "erc20 only." }
+        symbol: { type: string, example: USDT }
+        decimals: { type: integer, example: 6 }
+        rate: { type: number, description: "erc20 only — token per 1 native.", example: 4000 }
+        note: { type: string, description: "battery only — fee is charged off-chain (virtual)." }
+
+    GasQuote:
+      type: object
+      required: [estimated, charged, source, gasPriceWei]
+      properties:
+        estimated: { allOf: [{ $ref: "#/components/schemas/Uint256" }], description: "Full-tx gas incl. intrinsic + execution + authorization surcharge.", example: "157374" }
+        charged: { allOf: [{ $ref: "#/components/schemas/Uint256" }], description: "estimated × 1.2 buffer — the fee is computed from this.", example: "188848" }
+        source: { type: string, enum: [estimateGas, gasMeter, heuristic] }
+        authorizationGas: { allOf: [{ $ref: "#/components/schemas/Uint256" }], description: "EIP-7702 surcharge in `estimated` (12500 existing / 25000 empty / 0).", example: "12500" }
+        gasPriceWei: { allOf: [{ $ref: "#/components/schemas/Uint256" }], example: "2000000000" }
+        feeNativeWei: { allOf: [{ $ref: "#/components/schemas/Uint256" }], example: "377696000000000" }
+        feeNativeFormatted: { type: string, example: "0.000377696" }
+
+    Path:
+      type: string
+      enum: [direct, delegate]
+      description: |
+        Gasless delivery mechanism (paymaster/ERC-4337 not yet supported):
+        - `direct`   — one signed try-batch [fee REQUIRED, …user BREAK_ON_FAIL] sent straight to the
+                       user account (cheapest; the relay needs no delegation).
+        - `delegate` — the relay (itself 7702-delegated) proxies two signed batches via a self-call
+                       [userAcc.execute(fee), userAcc.execute(user)].
+
+    RoutesRequest:
+      type: object
+      required: [chain, from, payloads]
+      properties:
+        chain: { $ref: "#/components/schemas/ChainSlug" }
+        path: { allOf: [{ $ref: "#/components/schemas/Path" }], description: "Mechanism to price; default direct." }
+        from: { allOf: [{ $ref: "#/components/schemas/Address" }], description: "The delegated EOA the batch runs on." }
+        payloads:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/InputCall" }
+
+    RouteToken:
+      type: object
+      required: [address, symbol, decimals, rate, feeAmount, feeFormatted]
+      properties:
+        address: { $ref: "#/components/schemas/Address" }
+        symbol: { type: string, example: USDT }
+        decimals: { type: integer, example: 6 }
+        rate: { type: number, example: 4000 }
+        feeAmount: { allOf: [{ $ref: "#/components/schemas/Uint256" }], description: "Fee in the token's base units.", example: "1510784" }
+        feeFormatted: { type: string, example: "1.510784" }
+
+    RoutesResponse:
+      type: object
+      required: [chain, chainId, path, gas, tokens]
+      properties:
+        chain: { $ref: "#/components/schemas/ChainSlug" }
+        chainId: { type: integer, example: 1 }
+        path: { $ref: "#/components/schemas/Path" }
+        gas:
+          type: object
+          properties:
+            estimated: { $ref: "#/components/schemas/Uint256" }
+            charged: { $ref: "#/components/schemas/Uint256" }
+            source: { type: string, enum: [estimateGas, gasMeter, heuristic] }
+            gasPriceWei: { $ref: "#/components/schemas/Uint256" }
+            feeNativeWei: { $ref: "#/components/schemas/Uint256" }
+        tokens:
+          type: array
+          items: { $ref: "#/components/schemas/RouteToken" }
+
+    TypedData:
+      type: object
+      description: Ready-to-sign `eth_signTypedData_v4` input (ethers/viem `signTypedData`). Domain —
+        name "Hermes", version "v1.0.0", verifyingContract = the user's EOA, salt = the delegate impl.
+        The batch (mode, calls, nonce, deadline) lives in `message`.
+      required: [domain, types, primaryType, message]
+      properties:
+        domain:
+          type: object
+          required: [name, version, chainId, verifyingContract, salt]
+          properties:
+            name: { type: string, enum: [Hermes] }
+            version: { type: string, enum: [v1.0.0] }
+            chainId: { type: integer, example: 1 }
+            verifyingContract: { $ref: "#/components/schemas/Address" }
+            salt: { $ref: "#/components/schemas/Bytes32" }
+        types: { type: object, description: "`Call` and `Execute` EIP-712 type definitions." }
+        primaryType: { type: string, enum: [Execute] }
+        message:
+          type: object
+          required: [mode, calls, nonce, deadline]
+          properties:
+            mode: { $ref: "#/components/schemas/Mode" }
+            calls: { type: array, items: { $ref: "#/components/schemas/Call" } }
+            nonce: { $ref: "#/components/schemas/Uint256" }
+            deadline: { $ref: "#/components/schemas/Uint256" }
+
+    SignArtifact:
+      type: object
+      description: One ready-to-sign batch. Pass `typedData` to the wallet; `digest` is its EIP-712 hash.
+      required: [typedData, digest]
+      properties:
+        typedData: { $ref: "#/components/schemas/TypedData" }
+        digest: { $ref: "#/components/schemas/Bytes32" }
+
+    AuthorizationRequest:
+      type: object
+      description: Unsigned EIP-7702 tuple to sign when `requiresAuthorization` is true (ethers `wallet.authorize`).
+      required: [chainId, address, nonce]
+      properties:
+        chainId: { type: integer, example: 1 }
+        address: { allOf: [{ $ref: "#/components/schemas/Address" }], description: "The HermesDelegateV1 implementation." }
+        nonce: { type: integer, description: "The EOA's current transaction nonce.", example: 0 }
+
+    SignedAuthorization:
+      type: object
+      description: Signed EIP-7702 authorization (v accepted as an alias of yParity).
+      required: [chainId, address, nonce, yParity, r, s]
+      properties:
+        chainId: { $ref: "#/components/schemas/Uint256" }
+        address: { $ref: "#/components/schemas/Address" }
+        nonce: { $ref: "#/components/schemas/Uint256" }
+        yParity: { type: integer, enum: [0, 1] }
+        r: { $ref: "#/components/schemas/Bytes32" }
+        s: { $ref: "#/components/schemas/Bytes32" }
+
+    AccountStatus:
+      type: object
+      required: [address, delegated, delegatedTo, requiresAuthorization, authorization]
+      properties:
+        address: { $ref: "#/components/schemas/Address" }
+        delegated: { type: boolean }
+        delegatedTo: { allOf: [{ $ref: "#/components/schemas/Address" }], nullable: true }
+        requiresAuthorization: { type: boolean }
+        authorization: { allOf: [{ $ref: "#/components/schemas/AuthorizationRequest" }], nullable: true }
+
+    EmulateRequest:
+      type: object
+      required: [type, chain, from, payloads]
+      properties:
+        type: { type: string, enum: [battery, gasless] }
+        path: { allOf: [{ $ref: "#/components/schemas/Path" }], description: "gasless only; default direct. Ignored for battery." }
+        chain: { $ref: "#/components/schemas/ChainSlug" }
+        asset:
+          type: string
+          description: "gasless only — `<chain>/<network>/erc20/<tokenAddress>`; must be an accepted fee token."
+          example: eth/mainnet/erc20/0xdAC17F958D2ee523a2206206994597C13D831ec7
+        from: { allOf: [{ $ref: "#/components/schemas/Address" }], description: "The delegated EOA the batch runs on." }
+        payloads:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/InputCall" }
+
+    EmulateResponse:
+      type: object
+      required: [uuid, type, chain, chainId, amount, amountFormatted, asset, account, gas, sign]
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          description: Quote id bound to the digest(s). Echo in /send; single-use, expires with the deadline.
+          example: "6f1e5a2b-9c34-4d7e-8a1f-2b3c4d5e6f70"
+        type: { type: string, enum: [battery, gasless] }
+        path: { allOf: [{ $ref: "#/components/schemas/Path" }], description: "Present for gasless only." }
+        chain: { $ref: "#/components/schemas/ChainSlug" }
+        chainId: { type: integer, example: 1 }
+        amount:
+          allOf: [{ $ref: "#/components/schemas/Uint256" }]
+          description: "gasless: fee in the token's base units (transferred on-chain). battery: fee in native wei (virtual)."
+          example: "1510784"
+        amountFormatted: { type: string, example: "1.510784" }
+        asset: { $ref: "#/components/schemas/FeeAsset" }
+        account: { $ref: "#/components/schemas/AccountStatus" }
+        gas: { $ref: "#/components/schemas/GasQuote" }
+        sign:
+          type: object
+          description: >-
+            The signable artifact(s), keyed by role — sign each present one and echo it to /send:
+            gasless direct → `combined`; gasless delegate → `fee` + `user`; battery → `user`.
+          properties:
+            combined: { $ref: "#/components/schemas/SignArtifact" }
+            fee: { $ref: "#/components/schemas/SignArtifact" }
+            user: { $ref: "#/components/schemas/SignArtifact" }
+
+    SignedBatch:
+      type: object
+      description: An echoed artifact plus its signature.
+      required: [typedData, signature]
+      properties:
+        typedData: { $ref: "#/components/schemas/TypedData" }
+        signature:
+          type: string
+          description: 65-byte ECDSA signature of the artifact's EIP-712 digest by the user.
+          pattern: "^0x[0-9a-fA-F]{130}$"
+
+    SendRequest:
+      type: object
+      description: >-
+        Echo the signed artifact(s) matching the quote's path — gasless direct → `combined`;
+        gasless delegate → `fee` + `user`; battery → `user`.
+      required: [uuid]
+      properties:
+        uuid: { type: string, format: uuid, example: "6f1e5a2b-9c34-4d7e-8a1f-2b3c4d5e6f70" }
+        combined:
+          allOf: [{ $ref: "#/components/schemas/SignedBatch" }]
+          description: gasless path=direct — the single [fee, …user] try-batch.
+        fee:
+          allOf: [{ $ref: "#/components/schemas/SignedBatch" }]
+          description: gasless path=delegate — the fee transfer batch.
+        user:
+          allOf: [{ $ref: "#/components/schemas/SignedBatch" }]
+          description: gasless path=delegate — the user batch; battery — the only batch.
+        authorization:
+          allOf: [{ $ref: "#/components/schemas/SignedAuthorization" }]
+          description: Required only when `account.requiresAuthorization` was true.
+
+    SendResponse:
+      type: object
+      required: [tx_hash, chain, mode, authorizationIncluded]
+      properties:
+        tx_hash: { $ref: "#/components/schemas/Bytes32" }
+        chain: { $ref: "#/components/schemas/ChainSlug" }
+        mode: { type: string, enum: [direct, proxy], description: "direct = battery (call user account); proxy = gasless (relay self-call)." }
+        authorizationIncluded: { type: boolean, description: "True when broadcast as a type-4 tx carrying the EIP-7702 authorization." }

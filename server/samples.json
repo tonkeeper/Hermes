@@ -1,0 +1,750 @@
+{
+  "_note": "Illustrative but internally coherent: signatures + authorization are real (hardhat account #2 = account) over the shown digests on chainId 1. Rates/gas are mock config values. path=paymaster (ERC-4337) is not yet supported.",
+  "routes": {
+    "POST /routes": {
+      "request": {
+        "chain": "eth",
+        "path": "direct",
+        "from": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+        "payloads": [
+          {
+            "to": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+            "value": "0",
+            "data": "0xdeadbeef"
+          }
+        ]
+      },
+      "response": {
+        "chain": "eth",
+        "chainId": 1,
+        "path": "direct",
+        "gas": {
+          "estimated": "126263",
+          "charged": "151515",
+          "source": "estimateGas",
+          "gasPriceWei": "2000000000",
+          "feeNativeWei": "303030000000000"
+        },
+        "tokens": [
+          {
+            "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+            "symbol": "USDT",
+            "decimals": 6,
+            "rate": 4000,
+            "feeAmount": "606060",
+            "feeFormatted": "0.60606"
+          }
+        ]
+      }
+    }
+  },
+  "emulate": {
+    "POST /emulate (gasless, path=direct)": {
+      "request": {
+        "type": "gasless",
+        "path": "direct",
+        "chain": "eth",
+        "asset": "eth/mainnet/erc20/0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        "from": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+        "payloads": [
+          {
+            "to": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+            "value": "0",
+            "data": "0xdeadbeef"
+          }
+        ]
+      },
+      "response": {
+        "uuid": "6f1e5a2b-9c34-4d7e-8a1f-2b3c4d5e6f70",
+        "type": "gasless",
+        "path": "direct",
+        "chain": "eth",
+        "chainId": 1,
+        "amount": "666060",
+        "amountFormatted": "0.66606",
+        "asset": {
+          "kind": "erc20",
+          "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+          "symbol": "USDT",
+          "decimals": 6,
+          "rate": 4000
+        },
+        "account": {
+          "address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+          "delegated": false,
+          "delegatedTo": null,
+          "requiresAuthorization": true,
+          "authorization": {
+            "chainId": 1,
+            "address": "0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B",
+            "nonce": 0
+          }
+        },
+        "gas": {
+          "estimated": "138763",
+          "charged": "166515",
+          "source": "gasMeter",
+          "authorizationGas": "12500",
+          "gasPriceWei": "2000000000",
+          "feeNativeWei": "333030000000000",
+          "feeNativeFormatted": "0.00033303"
+        },
+        "sign": {
+          "combined": {
+            "typedData": {
+              "domain": {
+                "name": "Hermes",
+                "version": "v1.0.0",
+                "chainId": 1,
+                "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+              },
+              "types": {
+                "Call": [
+                  {
+                    "name": "target",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "data",
+                    "type": "bytes"
+                  }
+                ],
+                "Execute": [
+                  {
+                    "name": "mode",
+                    "type": "bytes32"
+                  },
+                  {
+                    "name": "calls",
+                    "type": "Call[]"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "deadline",
+                    "type": "uint256"
+                  }
+                ]
+              },
+              "primaryType": "Execute",
+              "message": {
+                "mode": "0x0101000000007821000100000000000000000000000000000000000000000009",
+                "calls": [
+                  {
+                    "target": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                    "value": "0",
+                    "data": "0xa9059cbb00000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c800000000000000000000000000000000000000000000000000000000000a29cc"
+                  },
+                  {
+                    "target": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+                    "value": "0",
+                    "data": "0xdeadbeef"
+                  }
+                ],
+                "nonce": "0",
+                "deadline": "1784679000"
+              }
+            },
+            "digest": "0xd4de51a8dbc219e44d64292d0a91f515fe8567ee433f89b7b873efc60f4ddef5"
+          }
+        }
+      }
+    },
+    "POST /emulate (gasless, path=delegate)": {
+      "request": {
+        "type": "gasless",
+        "path": "delegate",
+        "chain": "eth",
+        "asset": "eth/mainnet/erc20/0xdAC17F958D2ee523a2206206994597C13D831ec7",
+        "from": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+        "payloads": [
+          {
+            "to": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+            "value": "0",
+            "data": "0xdeadbeef"
+          }
+        ]
+      },
+      "response": {
+        "uuid": "1b2c3d4e-5f60-7a8b-9c0d-1e2f3a4b5c6d",
+        "type": "gasless",
+        "path": "delegate",
+        "chain": "eth",
+        "chainId": 1,
+        "amount": "755392",
+        "amountFormatted": "0.755392",
+        "asset": {
+          "kind": "erc20",
+          "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+          "symbol": "USDT",
+          "decimals": 6,
+          "rate": 4000
+        },
+        "account": {
+          "address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+          "delegated": true,
+          "delegatedTo": "0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B",
+          "requiresAuthorization": false,
+          "authorization": null
+        },
+        "gas": {
+          "estimated": "157374",
+          "charged": "188848",
+          "source": "gasMeter",
+          "authorizationGas": "0",
+          "gasPriceWei": "2000000000",
+          "feeNativeWei": "377696000000000",
+          "feeNativeFormatted": "0.000377696"
+        },
+        "sign": {
+          "fee": {
+            "typedData": {
+              "domain": {
+                "name": "Hermes",
+                "version": "v1.0.0",
+                "chainId": 1,
+                "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+              },
+              "types": {
+                "Call": [
+                  {
+                    "name": "target",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "data",
+                    "type": "bytes"
+                  }
+                ],
+                "Execute": [
+                  {
+                    "name": "mode",
+                    "type": "bytes32"
+                  },
+                  {
+                    "name": "calls",
+                    "type": "Call[]"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "deadline",
+                    "type": "uint256"
+                  }
+                ]
+              },
+              "primaryType": "Execute",
+              "message": {
+                "mode": "0x0100000000007821000100000000000000000000000000000000000000000000",
+                "calls": [
+                  {
+                    "target": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                    "value": "0",
+                    "data": "0xa9059cbb00000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c800000000000000000000000000000000000000000000000000000000000b86c0"
+                  }
+                ],
+                "nonce": "0",
+                "deadline": "1784679000"
+              }
+            },
+            "digest": "0x8b9d7f1373d45a16817afad0456ff8695ed85302ddf7600309c52ddb797bb6c2"
+          },
+          "user": {
+            "typedData": {
+              "domain": {
+                "name": "Hermes",
+                "version": "v1.0.0",
+                "chainId": 1,
+                "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+              },
+              "types": {
+                "Call": [
+                  {
+                    "name": "target",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "data",
+                    "type": "bytes"
+                  }
+                ],
+                "Execute": [
+                  {
+                    "name": "mode",
+                    "type": "bytes32"
+                  },
+                  {
+                    "name": "calls",
+                    "type": "Call[]"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "deadline",
+                    "type": "uint256"
+                  }
+                ]
+              },
+              "primaryType": "Execute",
+              "message": {
+                "mode": "0x0100000000007821000100000000000000000000000000000000000000000000",
+                "calls": [
+                  {
+                    "target": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+                    "value": "0",
+                    "data": "0xdeadbeef"
+                  }
+                ],
+                "nonce": "1",
+                "deadline": "1784679000"
+              }
+            },
+            "digest": "0x463e9af9c7edb6a797b27e193bc91f3aa83f48e42a03fd78b73c88c1c712e481"
+          }
+        }
+      }
+    },
+    "POST /emulate (battery)": {
+      "request": {
+        "type": "battery",
+        "chain": "eth",
+        "from": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+        "payloads": [
+          {
+            "to": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+            "value": "0",
+            "data": "0xdeadbeef"
+          }
+        ]
+      },
+      "response": {
+        "uuid": "aa11bb22-cc33-dd44-ee55-ff6677889900",
+        "type": "battery",
+        "chain": "eth",
+        "chainId": 1,
+        "amount": "110442000000000",
+        "amountFormatted": "0.000110442",
+        "asset": {
+          "kind": "native",
+          "symbol": "ETH",
+          "decimals": 18,
+          "note": "battery fee is charged off-chain (virtual)"
+        },
+        "account": {
+          "address": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+          "delegated": true,
+          "delegatedTo": "0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B",
+          "requiresAuthorization": false,
+          "authorization": null
+        },
+        "gas": {
+          "estimated": "55221",
+          "charged": "66265",
+          "source": "gasMeter",
+          "authorizationGas": "0",
+          "gasPriceWei": "2000000000",
+          "feeNativeWei": "110442000000000",
+          "feeNativeFormatted": "0.000110442"
+        },
+        "sign": {
+          "user": {
+            "typedData": {
+              "domain": {
+                "name": "Hermes",
+                "version": "v1.0.0",
+                "chainId": 1,
+                "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+                "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+              },
+              "types": {
+                "Call": [
+                  {
+                    "name": "target",
+                    "type": "address"
+                  },
+                  {
+                    "name": "value",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "data",
+                    "type": "bytes"
+                  }
+                ],
+                "Execute": [
+                  {
+                    "name": "mode",
+                    "type": "bytes32"
+                  },
+                  {
+                    "name": "calls",
+                    "type": "Call[]"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "uint256"
+                  },
+                  {
+                    "name": "deadline",
+                    "type": "uint256"
+                  }
+                ]
+              },
+              "primaryType": "Execute",
+              "message": {
+                "mode": "0x0100000000007821000100000000000000000000000000000000000000000000",
+                "calls": [
+                  {
+                    "target": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+                    "value": "0",
+                    "data": "0xdeadbeef"
+                  }
+                ],
+                "nonce": "0",
+                "deadline": "1784679000"
+              }
+            },
+            "digest": "0xfeef4ecde4f122a409ba4b4b05f29b4f123c2e826cb8882ddfc288d50c58236c"
+          }
+        }
+      }
+    }
+  },
+  "send": {
+    "POST /send (gasless path=direct — first tx, with authorization)": {
+      "request": {
+        "uuid": "6f1e5a2b-9c34-4d7e-8a1f-2b3c4d5e6f70",
+        "combined": {
+          "typedData": {
+            "domain": {
+              "name": "Hermes",
+              "version": "v1.0.0",
+              "chainId": 1,
+              "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+              "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+            },
+            "types": {
+              "Call": [
+                {
+                  "name": "target",
+                  "type": "address"
+                },
+                {
+                  "name": "value",
+                  "type": "uint256"
+                },
+                {
+                  "name": "data",
+                  "type": "bytes"
+                }
+              ],
+              "Execute": [
+                {
+                  "name": "mode",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "calls",
+                  "type": "Call[]"
+                },
+                {
+                  "name": "nonce",
+                  "type": "uint256"
+                },
+                {
+                  "name": "deadline",
+                  "type": "uint256"
+                }
+              ]
+            },
+            "primaryType": "Execute",
+            "message": {
+              "mode": "0x0101000000007821000100000000000000000000000000000000000000000009",
+              "calls": [
+                {
+                  "target": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                  "value": "0",
+                  "data": "0xa9059cbb00000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c800000000000000000000000000000000000000000000000000000000000a29cc"
+                },
+                {
+                  "target": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+                  "value": "0",
+                  "data": "0xdeadbeef"
+                }
+              ],
+              "nonce": "0",
+              "deadline": "1784679000"
+            }
+          },
+          "signature": "0x8eda0e22bae9814bbd840669d255727bcd2c525204038eef7966ebe51c6bba3726f4da578e4f8bb9781531a88114d7b31b3826fb951b45920432de47c6cd689d1c"
+        },
+        "authorization": {
+          "chainId": "1",
+          "address": "0x63c0c19a282a1B52b07dD5a65b58948A07DAE32B",
+          "nonce": "0",
+          "yParity": 0,
+          "r": "0x427aa1b47f3939292e243c6727a11b06fc8d8988f0ae180a4ce9a63c3b8d2d6f",
+          "s": "0x5e1a120413eb2165fed146829964f7b9a6591a697fb9e16755d56aa23d5146d6"
+        }
+      },
+      "response": {
+        "tx_hash": "0x3107a99b16a19939512d072c42cf9044c53595fbbe195c9ca2ea5d1ec30e5561",
+        "chain": "eth",
+        "mode": "direct",
+        "authorizationIncluded": true
+      }
+    },
+    "POST /send (gasless path=delegate)": {
+      "request": {
+        "uuid": "1b2c3d4e-5f60-7a8b-9c0d-1e2f3a4b5c6d",
+        "fee": {
+          "typedData": {
+            "domain": {
+              "name": "Hermes",
+              "version": "v1.0.0",
+              "chainId": 1,
+              "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+              "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+            },
+            "types": {
+              "Call": [
+                {
+                  "name": "target",
+                  "type": "address"
+                },
+                {
+                  "name": "value",
+                  "type": "uint256"
+                },
+                {
+                  "name": "data",
+                  "type": "bytes"
+                }
+              ],
+              "Execute": [
+                {
+                  "name": "mode",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "calls",
+                  "type": "Call[]"
+                },
+                {
+                  "name": "nonce",
+                  "type": "uint256"
+                },
+                {
+                  "name": "deadline",
+                  "type": "uint256"
+                }
+              ]
+            },
+            "primaryType": "Execute",
+            "message": {
+              "mode": "0x0100000000007821000100000000000000000000000000000000000000000000",
+              "calls": [
+                {
+                  "target": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+                  "value": "0",
+                  "data": "0xa9059cbb00000000000000000000000070997970c51812dc3a010c7d01b50e0d17dc79c800000000000000000000000000000000000000000000000000000000000b86c0"
+                }
+              ],
+              "nonce": "0",
+              "deadline": "1784679000"
+            }
+          },
+          "signature": "0x6489525d6ab019432bdc990a7fa4a87d77d7cc4e44638a485971ce05f0c4888a67180e1b33301ed62fe673e4b06ed39a172e81efc8c1abc96140e92908a2e00b1c"
+        },
+        "user": {
+          "typedData": {
+            "domain": {
+              "name": "Hermes",
+              "version": "v1.0.0",
+              "chainId": 1,
+              "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+              "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+            },
+            "types": {
+              "Call": [
+                {
+                  "name": "target",
+                  "type": "address"
+                },
+                {
+                  "name": "value",
+                  "type": "uint256"
+                },
+                {
+                  "name": "data",
+                  "type": "bytes"
+                }
+              ],
+              "Execute": [
+                {
+                  "name": "mode",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "calls",
+                  "type": "Call[]"
+                },
+                {
+                  "name": "nonce",
+                  "type": "uint256"
+                },
+                {
+                  "name": "deadline",
+                  "type": "uint256"
+                }
+              ]
+            },
+            "primaryType": "Execute",
+            "message": {
+              "mode": "0x0100000000007821000100000000000000000000000000000000000000000000",
+              "calls": [
+                {
+                  "target": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+                  "value": "0",
+                  "data": "0xdeadbeef"
+                }
+              ],
+              "nonce": "1",
+              "deadline": "1784679000"
+            }
+          },
+          "signature": "0x50dcf4abdc4ca0ec21cd38531beaae384b0000fb88ff1a95e69d05cf69f4a55e6cb53a9509b812c5203ca060020d5fb3cdbb664ed9e3ddedaff55f5ecf7fd91b1c"
+        }
+      },
+      "response": {
+        "tx_hash": "0x32bcbda1609c05e5bb9922f6d42c1c7a4c53498e94f925566a900a82a21cff62",
+        "chain": "eth",
+        "mode": "proxy",
+        "authorizationIncluded": false
+      }
+    },
+    "POST /send (battery)": {
+      "request": {
+        "uuid": "aa11bb22-cc33-dd44-ee55-ff6677889900",
+        "user": {
+          "typedData": {
+            "domain": {
+              "name": "Hermes",
+              "version": "v1.0.0",
+              "chainId": 1,
+              "verifyingContract": "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+              "salt": "0x00000000000000000000000063c0c19a282a1b52b07dd5a65b58948a07dae32b"
+            },
+            "types": {
+              "Call": [
+                {
+                  "name": "target",
+                  "type": "address"
+                },
+                {
+                  "name": "value",
+                  "type": "uint256"
+                },
+                {
+                  "name": "data",
+                  "type": "bytes"
+                }
+              ],
+              "Execute": [
+                {
+                  "name": "mode",
+                  "type": "bytes32"
+                },
+                {
+                  "name": "calls",
+                  "type": "Call[]"
+                },
+                {
+                  "name": "nonce",
+                  "type": "uint256"
+                },
+                {
+                  "name": "deadline",
+                  "type": "uint256"
+                }
+              ]
+            },
+            "primaryType": "Execute",
+            "message": {
+              "mode": "0x0100000000007821000100000000000000000000000000000000000000000000",
+              "calls": [
+                {
+                  "target": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+                  "value": "0",
+                  "data": "0xdeadbeef"
+                }
+              ],
+              "nonce": "0",
+              "deadline": "1784679000"
+            }
+          },
+          "signature": "0x8602280879e053faa2dc865947a5d106b73052a42032be097a553815fd71acc641f5b05e57acd0bde9e4596f87f14102a870f085656f41332425e743ddfe095f1c"
+        }
+      },
+      "response": {
+        "tx_hash": "0x18783618e246d42cea20c9303ffda0180ef6389855844e95bd28c66e239e7e7a",
+        "chain": "eth",
+        "mode": "direct",
+        "authorizationIncluded": false
+      }
+    }
+  },
+  "errors": {
+    "unknown fee token": {
+      "status": 400,
+      "body": {
+        "error": "token 0x… is not an accepted fee token on eth"
+      }
+    },
+    "bad path": {
+      "status": 400,
+      "body": {
+        "error": "path must be direct or delegate (paymaster not yet supported)"
+      }
+    },
+    "artifact mismatch": {
+      "status": 400,
+      "body": {
+        "error": "combined does not match the quote for this uuid"
+      }
+    },
+    "spent/unknown uuid": {
+      "status": 400,
+      "body": {
+        "error": "unknown uuid: quote not found, already used, or expired"
+      }
+    },
+    "undelegated without authorization": {
+      "status": 400,
+      "body": {
+        "error": "account has no delegation: include the signed EIP-7702 authorization from /emulate (account.authorization)"
+      }
+    }
+  }
+}

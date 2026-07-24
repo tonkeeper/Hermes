@@ -1,0 +1,17 @@
+.idea
+node_modules
+.env
+*.log
+reports
+coverage
+coverage.json
+typechain
+logs
+typechain-types
+
+# Hardhat files
+cache
+artifacts
+
+/abi/
+.DS_Store
