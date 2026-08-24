@@ -51,6 +51,10 @@ contract HermesV1 is IHermesNonce {
      * @dev Returns the value *before* the increment — that is the nonce bound into the caller's
      *      signature. Anyone may call this, but only ever for their own `msg.sender` slot, so it
      *      doubles as a self-service "cancel pending signature" primitive.
+     *
+     *      Also reachable from inside a delegate's batch, since under EIP-7702 the account is
+     *      `msg.sender` either way: a signed batch consumes *at least* one nonce. Read
+     *      `nonceOf(account)` instead of assuming one increment per batch.
      * @return current The caller's nonce as it was prior to this call.
      */
     function useNonce() external override returns (uint256 current) {
