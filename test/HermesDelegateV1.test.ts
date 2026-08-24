@@ -93,10 +93,10 @@ const MODE_BATCH_OPDATA_TRY = "0x0101" + "00".repeat(4) + "78210001" + "00".repe
 const MODE_EXEC_TYPE_2 = "0x0102" + "00".repeat(30); // execType=0x02 (unknown) -> unsupported
 
 // Try-mode `mode` with packed per-call 2-bit policies in the payload bytes [10:32]:
-// call i's policy sits at bits [2i+1:2i]. 00 OPTIONAL (log-and-continue), 01 REQUIRED
+// call i's policy sits at bits [2i+1:2i]. 00 OPTIONAL (log-and-continue), 01 REVERT_ON_FAIL
 // (failure reverts the batch), 10 BREAK_ON_FAIL (failure logs and ends the batch early),
 // 11 BREAK_ON_SUCCESS (success ends the batch early; failure logs and continues).
-const POLICY_REQUIRED = 1n;
+const POLICY_REVERT_ON_FAIL = 1n;
 const POLICY_BREAK_ON_FAIL = 2n;
 const POLICY_BREAK_ON_SUCCESS = 3n;
 const policyAt = (i: number, policy: bigint): bigint => policy << BigInt(2 * i);
@@ -640,16 +640,16 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 .withArgs(1n, counter.interface.encodeErrorResult("CounterBoom"));
         });
 
-        it("try mode + REQUIRED policy: a required call's failure reverts the whole batch", async () => {
+        it("try mode + REVERT_ON_FAIL policy: a reached call's failure reverts the whole batch", async () => {
             const { user, userAsDelegate, counter, counterAddr } = await setup();
             const calls: Call[] = [
                 bumpCall(counter, 1n, counterAddr),
                 { target: counterAddr, value: 0n, data: counter.interface.encodeFunctionData("boom") },
                 bumpCall(counter, 10n, counterAddr),
             ];
-            // The failing `boom` at index 1 is REQUIRED (01) -> atomic revert despite try mode.
+            // The failing `boom` at index 1 is REVERT_ON_FAIL (01) -> atomic revert despite try mode.
             const calldata = userAsDelegate.interface.encodeFunctionData("execute", [
-                modeTryWithPolicies(policyAt(1, POLICY_REQUIRED), false),
+                modeTryWithPolicies(policyAt(1, POLICY_REVERT_ON_FAIL), false),
                 encodeBatch(calls),
             ]);
             await expect(
@@ -665,9 +665,9 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 { target: counterAddr, value: 0n, data: counter.interface.encodeFunctionData("boom") },
                 bumpCall(counter, 10n, counterAddr),
             ];
-            // Calls 0 and 2 are REQUIRED, call 1 keeps the OPTIONAL default (00) and may fail.
+            // Calls 0 and 2 are REVERT_ON_FAIL, call 1 keeps the OPTIONAL default (00) and may fail.
             const calldata = userAsDelegate.interface.encodeFunctionData("execute", [
-                modeTryWithPolicies(policyAt(0, POLICY_REQUIRED) | policyAt(2, POLICY_REQUIRED), false),
+                modeTryWithPolicies(policyAt(0, POLICY_REVERT_ON_FAIL) | policyAt(2, POLICY_REVERT_ON_FAIL), false),
                 encodeBatch(calls),
             ]);
             const tx = await user.sendTransaction({ to: user.address, data: calldata });
@@ -722,6 +722,38 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await counter.value()).to.equal(11n);
             await expect(tx).to.not.emit(userAsDelegate, "ERC7579TryExecuteFail");
             await expect(tx).to.not.emit(userAsDelegate, "BatchInterrupted");
+        });
+
+        it("try mode: a REVERT_ON_FAIL call is skipped when an earlier break ends the batch", async () => {
+            const { user, userAsDelegate, counter, counterAddr, token, tokenAddr, admin } = await setup();
+
+            // The shape from the finding: [action = BREAK_ON_SUCCESS, fee = REVERT_ON_FAIL]. A policy
+            // governs what a call's outcome does, not whether the call is reached — the succeeding
+            // action ends the batch, so the fee at index 1 never runs and the tx still succeeds.
+            const relayer = admin.address as Address;
+            const calls: Call[] = [
+                bumpCall(counter, 1n, counterAddr),
+                {
+                    target: tokenAddr,
+                    value: 0n,
+                    data: token.interface.encodeFunctionData("transfer", [relayer, parseUnits("5", 18)]),
+                },
+            ];
+            const calldata = userAsDelegate.interface.encodeFunctionData("execute", [
+                modeTryWithPolicies(
+                    policyAt(0, POLICY_BREAK_ON_SUCCESS) | policyAt(1, POLICY_REVERT_ON_FAIL),
+                    false,
+                ),
+                encodeBatch(calls),
+            ]);
+
+            const feeBefore = await token.balanceOf(relayer);
+            const tx = await user.sendTransaction({ to: user.address, data: calldata });
+            expectSuccess((await tx.wait()) as ContractTransactionReceipt);
+
+            expect(await counter.value()).to.equal(1n);
+            expect(await token.balanceOf(relayer)).to.equal(feeBefore); // fee never reached
+            await expect(tx).to.emit(userAsDelegate, "BatchInterrupted").withArgs(0n);
         });
 
         it("try mode + BREAK_ON_SUCCESS policy: a success ends the batch early", async () => {
@@ -1190,15 +1222,15 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(receipt.gasUsed).to.be.greaterThan(900_000n);
         });
 
-        it("flat gasless batch via policies: fee is REQUIRED, user calls may fail", async () => {
+        it("flat gasless batch via policies: fee is REVERT_ON_FAIL, user calls may fail", async () => {
             const { admin, user, userAsDelegate, guard, token, tokenAddr, counter, counterAddr, chainId, implAddr } =
                 await setup();
 
-            // No nesting: one signed try batch where call 0 (the fee) is REQUIRED and the user's
+            // No nesting: one signed try batch where call 0 (the fee) is REVERT_ON_FAIL and the user's
             // calls are best-effort. Replaces the outer-atomic + inner-try composition.
             const fee = parseUnits("5", 18);
             const relayer = admin.address as Address;
-            const mode = modeTryWithPolicies(policyAt(0, POLICY_REQUIRED), true); // call 0 = fee transfer
+            const mode = modeTryWithPolicies(policyAt(0, POLICY_REVERT_ON_FAIL), true); // call 0 = fee transfer
             const calls: Call[] = [
                 {
                     target: tokenAddr,
@@ -1234,15 +1266,15 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 .withArgs(1n, counter.interface.encodeErrorResult("CounterBoom"));
         });
 
-        it("flat gasless batch via policies: a failing REQUIRED fee reverts everything — drain front-run gives nothing", async () => {
+        it("flat gasless batch via policies: a failing REVERT_ON_FAIL fee reverts everything — drain front-run gives nothing", async () => {
             const { admin, user, userAsDelegate, guard, token, tokenAddr, counter, counterAddr, chainId, implAddr } =
                 await setup();
 
             // The user's token balance is 1000 GAS; a fee of 2000 models a front-run drain — the
-            // REQUIRED fee transfer reverts, so the user's calls must NOT execute (no free service).
+            // REVERT_ON_FAIL fee transfer reverts, so the user's calls must NOT execute (no free service).
             const fee = parseUnits("2000", 18);
             const relayer = admin.address as Address;
-            const mode = modeTryWithPolicies(policyAt(0, POLICY_REQUIRED), true);
+            const mode = modeTryWithPolicies(policyAt(0, POLICY_REVERT_ON_FAIL), true);
             const calls: Call[] = [
                 {
                     target: tokenAddr,
@@ -1272,17 +1304,17 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await counter.value()).to.equal(0n);
         });
 
-        it("flat gasless batch via policies: REQUIRED fee + BREAK_ON_SUCCESS fallback chain", async () => {
+        it("flat gasless batch via policies: REVERT_ON_FAIL fee + BREAK_ON_SUCCESS fallback chain", async () => {
             const { admin, user, userAsDelegate, guard, token, tokenAddr, counter, counterAddr, chainId, implAddr } =
                 await setup();
 
-            // Product shape for "route with fallbacks": call 0 is the REQUIRED relayer fee, calls
+            // Product shape for "route with fallbacks": call 0 is the REVERT_ON_FAIL relayer fee, calls
             // 1 and 2 are BREAK_ON_SUCCESS alternatives (primary route fails -> logged, fallback
             // lands -> batch ends), call 3 is a trailing call that must be skipped by the break.
             const fee = parseUnits("5", 18);
             const relayer = admin.address as Address;
             const mode = modeTryWithPolicies(
-                policyAt(0, POLICY_REQUIRED) |
+                policyAt(0, POLICY_REVERT_ON_FAIL) |
                     policyAt(1, POLICY_BREAK_ON_SUCCESS) |
                     policyAt(2, POLICY_BREAK_ON_SUCCESS),
                 true,
@@ -1325,7 +1357,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             await expect(tx).to.emit(userAsDelegate, "BatchInterrupted").withArgs(2n);
         });
 
-        it("binds the policies: a relayer cannot downgrade a REQUIRED call", async () => {
+        it("binds the policies: a relayer cannot downgrade a REVERT_ON_FAIL call", async () => {
             const { admin, user, userAsDelegate, guard, token, tokenAddr, chainId, implAddr } = await setup();
 
             const fee = parseUnits("5", 18);
@@ -1337,10 +1369,10 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 },
             ];
             const nonce = await guard.nonceOf(user.address);
-            // Signed with call 0 REQUIRED (fee), submitted with a zero payload (all OPTIONAL): the
+            // Signed with call 0 REVERT_ON_FAIL (fee), submitted with a zero payload (all OPTIONAL): the
             // policies live in `mode`, which is bound into the digest — the downgrade must not validate.
             const digest = computeExecDigest({
-                mode: modeTryWithPolicies(policyAt(0, POLICY_REQUIRED), true),
+                mode: modeTryWithPolicies(policyAt(0, POLICY_REVERT_ON_FAIL), true),
                 calls,
                 nonce,
                 deadline: FAR_FUTURE,
