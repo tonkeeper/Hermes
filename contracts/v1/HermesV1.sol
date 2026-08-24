@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.35;
 
-import "../interfaces/IHermesNonce.sol";
+import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
 
 /**
  * @title HermesV1 - Singleton nonce manager for Hermes delegates.
