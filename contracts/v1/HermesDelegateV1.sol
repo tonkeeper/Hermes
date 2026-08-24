@@ -134,11 +134,17 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         BatchOpData
     }
 
-    /// @dev Maximum batch size in try mode — the mode payload (`bytes22`, 176 bits) carries one
-    ///      2-bit policy per call, so 88 slots keep every call's policy always expressible.
-    uint256 private constant MAX_TRY_CALLS = 88;
+    /// @dev Bit width of the ERC-7821 mode payload (`bytes22`, mode bytes [10:32]).
+    uint256 private constant MODE_PAYLOAD_BITS = 176;
+    /// @dev Maximum batch size in try mode — the mode payload carries one `POLICY_BITS`-wide
+    ///      policy per call, so 88 slots keep every call's policy always expressible.
+    uint256 private constant MAX_TRY_CALLS = MODE_PAYLOAD_BITS / POLICY_BITS;
 
     // ─── Per-call try-mode policies (2 bits each; call `i` at bits [2i+1:2i] of the payload) ───
+    /// @dev Bit width of one per-call policy slot inside the packed policies word.
+    uint256 private constant POLICY_BITS = 2;
+    /// @dev Mask selecting a single `POLICY_BITS`-wide policy slot (`0b11`).
+    uint256 private constant POLICY_MASK = 3;
     /// @dev `00`: a failure is logged via `ERC7579TryExecuteFail` and the batch continues.
     uint256 private constant POLICY_OPTIONAL = 0x0;
     /// @dev `01`: a failure reverts the whole batch, as in the default exec type.
@@ -361,7 +367,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
                 continue;
             }
 
-            uint256 policy = (policies >> (2 * i)) & 3;
+            uint256 policy = (policies >> (POLICY_BITS * i)) & POLICY_MASK;
 
             if (!success) {
                 if (policy == POLICY_REQUIRED) {
