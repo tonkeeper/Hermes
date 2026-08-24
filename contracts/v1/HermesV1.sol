@@ -32,7 +32,7 @@ import "../interfaces/IHermesNonce.sol";
 contract HermesV1 is IHermesNonce {
 
     /// @dev Per-account monotonic nonce counter, keyed by the calling account (`msg.sender`).
-    mapping(address => uint256) private _nonces;
+    mapping(address account => uint256 nonce) private _nonces;
 
     /**
      * @notice Returns the next unused nonce for `account` — i.e. the value a signer must embed in
