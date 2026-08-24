@@ -19,14 +19,16 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *      ERC-7821 minimal batch executor (`execute(bytes32 mode, bytes executionData)`) rather than
  *      bespoke per-flow selectors, so standard tooling (e.g. EIP-5792 `wallet_sendCalls`) can drive it.
  *
- *      Two ERC-7821 modes are supported, onto which the three authorization flows map:
+ *      Two ERC-7821 modes are supported, onto which the three authorization flows map — flows that
+ *      a smart account usually splits across bespoke selectors (`executeBatch`, `executeUserOp`,
+ *      `executeWithSignature` and the like) all funnel through this one entry point instead:
  *      - `0x01000000000000000000…` (batch, no `opData`): authorized by `msg.sender`.
- *          - The delegated EOA itself (self-call) — replaces `execute`/`executeBatch`.
- *          - The canonical EntryPoint — replaces `executeUserOp`/`executeUserOps`. Coupling is
+ *          - The delegated EOA itself (self-call) — the plain batching flow.
+ *          - The canonical EntryPoint — the ERC-4337 flow. Coupling is
  *            implicit: `validateUserOp` only accepts userOps whose callData targets `execute`, and
  *            EntryPoint's protocol guarantees `validateUserOp` runs before the execution call.
  *      - `0x01000000000078210001…` (batch, with `opData`): msg.sender agnostic, signature-authorized
- *          — replaces `executeWithSignature`. `opData` is `abi.encode(uint256 deadline, bytes signature)`,
+ *          — the relayed flow. `opData` is `abi.encode(uint256 deadline, bytes signature)`,
  *          where `signature` is the delegated EOA's EIP-712 signature over
  *          `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)`; replay-protected via the
  *          Hermes nonce and time-bounded by the signed `deadline` (a signature dies when its nonce is
@@ -104,13 +106,16 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     bytes32 private constant EXECUTE_TYPEHASH = keccak256("Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)Call(address target,uint256 value,bytes data)");
     /// @dev EIP-712 domain typehash; the `salt` field carries the implementation address (see `_domainSeparator`).
     bytes32 private constant HERMES_DOMAIN_SEPARATOR_HASH = keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)");
+    /// @dev EIP-712 domain `name` field, pre-hashed. The preimage "Hermes" is what `eip712Domain()` reports.
     bytes32 private constant HERMES_NAME_HASH = keccak256("Hermes");
+    /// @dev EIP-712 domain `version` field, pre-hashed. The preimage "v1.0.0" is what `eip712Domain()` reports.
     bytes32 private constant VERSION_HASH = keccak256("v1.0.0");
     /// @dev ERC-1271 magic value for a valid signature.
     bytes4 internal constant ERC1271_SUCCESS = IERC1271.isValidSignature.selector;
     /// @dev ERC-1271 return value for an invalid signature.
     bytes4 internal constant ERC1271_FAILURE = 0xffffffff;
-    /// @dev ERC-7739 support-detection probe hash; `isValidSignature(this, "")` returns the magic below.
+    /// @dev ERC-7739 support-detection probe hash: `isValidSignature(0x7739…7739, "")` — this
+    ///      constant as the `hash` argument, with an empty signature — returns the magic below.
     bytes32 private constant ERC7739_SUPPORT_HASH = 0x7739773977397739773977397739773977397739773977397739773977397739;
     /// @dev ERC-7739 support-detection magic value returned for the probe.
     bytes4 private constant ERC7739_SUPPORT_MAGIC = 0x77390001;
@@ -124,7 +129,11 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     address private constant ENTRY_POINT_V9 = 0x433709009B8330FDa32311DF1C2AFA402eD8D009;
 
     // ─── ERC-7821 mode ───
+    /// @dev ERC-7821 mode selector of the batch mode without `opData` (`executionData` is
+    ///      `abi.encode(Call[])`), authorized by `msg.sender`.
     ModeSelector private constant MODE_SELECTOR_NO_OPDATA = ModeSelector.wrap(0x00000000);
+    /// @dev ERC-7821 mode selector of the batch mode with `opData` (`executionData` is
+    ///      `abi.encode(Call[], bytes opData)`), authorized by the delegated EOA's EIP-712 signature.
     ModeSelector private constant MODE_SELECTOR_OPDATA = ModeSelector.wrap(0x78210001);
 
     /// @dev `_decodeExecutionMode` classification; `Unsupported` first so the zero value fails closed.
@@ -163,6 +172,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         delegateAddress = bytes32(uint256(uint160(address(this))));
     }
 
+    /// @dev Restricts a function to the two trusted canonical EntryPoints (v0.8 and v0.9); any
+    ///      other caller reverts with `OnlyEntryPoint`.
     modifier onlyEntryPoint() {
         if (!_isEntryPoint(msg.sender)) {
             revert OnlyEntryPoint();
@@ -171,6 +182,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     }
 
     /// @notice True iff `account` is one of the trusted EntryPoints (v0.8 or v0.9).
+    /// @dev EntryPoint discovery surface for SDKs and indexers: probe an address rather than read a
+    ///      single `entryPoint()` getter, since this account trusts two EntryPoints, not one.
+    /// @param account The address to probe.
+    /// @return True iff `account` is the v0.8 or the v0.9 canonical EntryPoint.
     function isSupportedEntryPoint(address account) external pure returns (bool) {
         return _isEntryPoint(account);
     }
@@ -180,6 +195,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     }
 
     /// @notice ERC-7779 account identifier: vendor, account type and version.
+    /// @return The identifier of this implementation, `"Hermes.Delegate.v1.0.0"`.
     function accountId() external pure override returns (string memory) {
         return "Hermes.Delegate.v1.0.0";
     }
@@ -188,6 +204,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///         `IAccount`, the ERC-7821 batch executor and ERC-5267 domain introspection.
     /// @dev ERC-7821 is canonically probed via `supportsExecutionMode`; this is the complementary
     ///      ERC-165 advertisement.
+    /// @param interfaceId The ERC-165 interface identifier to probe.
+    /// @return True iff `interfaceId` is implemented by this account, here or in `HermesBase`.
     function supportsInterface(bytes4 interfaceId) public view override returns (bool) {
         return interfaceId == type(IAccount).interfaceId
             || interfaceId == type(IERC7821).interfaceId
@@ -203,6 +221,12 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev Only userOps whose callData targets `execute` are accepted, so a validated op can never be
     ///      coupled with an arbitrary execution path. Per ERC-4337 a bad signature returns 1
     ///      (SIG_VALIDATION_FAILED) instead of reverting.
+    /// @param userOp The user operation being validated; only `callData` (selector check) and
+    ///        `signature` are read.
+    /// @param userOpHash The EntryPoint's EIP-712 typed hash of `userOp`, signed by the EOA as-is.
+    /// @param missingAccountFunds Deposit shortfall to pre-fund; forwarded to the caller and not
+    ///        checked, since the EntryPoint checks its own balance.
+    /// @return validationData 0 for the delegated EOA's signature, 1 (SIG_VALIDATION_FAILED) otherwise.
     function validateUserOp(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
         external
         override
@@ -235,8 +259,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///                          signature)`, the signature being the delegated EOA's EIP-712 signature
     ///                          over `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)`,
     ///                          replay-protected by the Hermes nonce and rejected once `block.timestamp`
-    ///                          passes `deadline`. The nonce is consumed before any external call, so the
-    ///                          signature cannot be replayed by reentering from a target.
+    ///                          passes `deadline`. The nonce is consumed before any of the batch's
+    ///                          calls, so the signature cannot be replayed by reentering from a target.
     ///         Both modes accept exec type `0x00` (atomic: revert and bubble up on the first failing
     ///         call) and `0x01` ("try": each call's outcome is governed by its 2-bit policy in the
     ///         mode payload [10:32] — OPTIONAL `00` log-and-continue, REQUIRED `01` revert the whole
@@ -275,7 +299,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      EIP-712 signature check. `opData` is `abi.encode(uint256 deadline, bytes signature)`.
     ///      `mode` and `deadline` are bound into the digest, so the signature validates only under
     ///      the exact mode it was signed for and a relayer cannot extend its lifetime; `deadline == 0`
-    ///      means "no expiry". The nonce is consumed before any external call, so the signature
+    ///      means "no expiry". The nonce is consumed before any of the batch's calls — the
+    ///      `manager.useNonce()` call is the only external call that precedes them — so the signature
     ///      cannot be replayed by reentering from a target.
     function _verifySignedBatch(bytes32 mode, Call[] memory calls, bytes memory opData) private {
         (uint256 deadline, bytes memory signature) = abi.decode(opData, (uint256, bytes));
@@ -294,6 +319,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
 
     /// @notice ERC-7821 support probe for frontends. True only for the two supported single-batch
     ///         modes, each in the default (`0x00`) and try (`0x01`) exec types.
+    /// @param mode The ERC-7821 execution mode to probe.
+    /// @return True iff `execute` accepts `mode`. The payload is ignored: every value is valid.
     function supportsExecutionMode(bytes32 mode) external pure override returns (bool) {
         (ModeId id, , ) = _decodeExecutionMode(mode);
         return id != ModeId.Unsupported;
@@ -406,6 +433,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev The account domain is `_domainSeparator()` — the same domain the opData path uses and
     ///      ERC-5267 `eip712Domain()` reports, so every signing surface stays on one domain.
     ///      Returns the ERC-7739 detection magic for the empty-signature probe.
+    /// @param hash The digest the verifier wants checked, or `0x7739…7739` for the ERC-7739 probe.
+    /// @param signature One of the two ERC-7739 nested encodings, or empty for the probe.
+    /// @return `0x1626ba7e` (ERC-1271 magic) if the signature is valid, `0x77390001` for the
+    ///         ERC-7739 detection probe, and `0xffffffff` otherwise.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view override returns (bytes4) {
         if (_isValidTypedDataSig(hash, signature) || _isValidPersonalSig(hash, signature)) {
             return ERC1271_SUCCESS;
@@ -474,6 +505,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///         returned `name`/`version` are the preimages of `HERMES_NAME_HASH`/`VERSION_HASH`.
     /// @dev `fields = 0x1f` (11111): name, version, chainId, verifyingContract and salt are all present;
     ///      no `extensions`.
+    /// @return fields Bitmap of the populated domain fields, always `0x1f`.
+    /// @return name Domain `name`, always `"Hermes"` (preimage of `HERMES_NAME_HASH`).
+    /// @return version Domain `version`, always `"v1.0.0"` (preimage of `VERSION_HASH`).
+    /// @return chainId The chain this account signs for (`block.chainid`).
+    /// @return verifyingContract The account itself (`address(this)`), i.e. the delegated EOA.
+    /// @return salt The implementation address, pinning signatures to this delegate version.
+    /// @return extensions Always empty; this domain declares no ERC-5267 extensions.
     function eip712Domain()
         external
         view
@@ -494,6 +532,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     // ─────────────────────────────────────────────────────────────────────────
     // Utility
     // ─────────────────────────────────────────────────────────────────────────
+    /// @notice Accepts plain native-value transfers with empty calldata, preserving EOA-like behavior.
     receive() external payable {}
 
     /// @dev Accepts calls with unknown selectors (e.g. token callbacks not modeled in HermesBase)
