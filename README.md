@@ -9,7 +9,7 @@ An EOA delegates its code to `HermesDelegateV1` and gains smart-account capabili
 | Contract | Purpose |
 | --- | --- |
 | [`HermesDelegateV1.sol`](contracts/v1/HermesDelegateV1.sol) | The EIP-7702 delegate implementation. ERC-4337 account (`IAccount`), ERC-1271/ERC-7739 verifier, ERC-7821 batch executor, ERC-5267 domain. |
-| [`HermesBase.sol`](contracts/HermesBase.sol) | Token-receiver callbacks (ERC-721/1155/777/677), ERC-165 and the ERC-7779 surface (`accountId`, `accountStorageBases`). |
+| [`HermesBase.sol`](contracts/HermesBase.sol) | Token-receiver callbacks (ERC-721/1155/677), ERC-165 and the ERC-7779 surface (`accountId`, `accountStorageBases`). |
 | [`HermesV1.sol`](contracts/v1/HermesV1.sol) | Manager singleton (`IHermesNonce`): per-account incrementing nonce used as replay protection for signature-based execution. |
 | [`interfaces/IHermesNonce.sol`](contracts/interfaces/IHermesNonce.sol) | Minimal manager interface (`useNonce`) the delegate pins as an immutable dependency. |
 | [`interfaces/IERC7779.sol`](contracts/interfaces/IERC7779.sol) | ERC-7779 account-introspection interface. |
