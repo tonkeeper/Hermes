@@ -30,7 +30,9 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *          where `signature` is the delegated EOA's EIP-712 signature over
  *          `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)`; replay-protected via the
  *          Hermes nonce and time-bounded by the signed `deadline` (a signature dies when its nonce is
- *          consumed or its deadline passes; a `deadline` of 0 disables expiry). The payload is a
+ *          consumed or its deadline passes; a `deadline` of 0 disables expiry). A signed batch spends
+ *          its nonce only when it runs to completion: the increment shares the transaction with the
+ *          batch, so a mined batch that reverts rolls it back. The payload is a
  *          fully-typed struct, so signing wallets render targets, values and calldata — no opaque hashes.
  *
  *      Both modes are also accepted with ERC-7579 exec type `0x01` ("try", `0x0101…`). In try mode
@@ -236,7 +238,9 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///                          over `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)`,
     ///                          replay-protected by the Hermes nonce and rejected once `block.timestamp`
     ///                          passes `deadline`. The nonce is consumed before any external call, so the
-    ///                          signature cannot be replayed by reentering from a target.
+    ///                          signature cannot be replayed by reentering from a target. That
+    ///                          consumption is rolled back if the batch itself reverts, so the nonce is
+    ///                          spent only on success (see `_verifySignedBatch`).
     ///         Both modes accept exec type `0x00` (atomic: revert and bubble up on the first failing
     ///         call) and `0x01` ("try": each call's outcome is governed by its 2-bit policy in the
     ///         mode payload [10:32] — OPTIONAL `00` log-and-continue, REQUIRED `01` revert the whole
@@ -277,6 +281,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      the exact mode it was signed for and a relayer cannot extend its lifetime; `deadline == 0`
     ///      means "no expiry". The nonce is consumed before any external call, so the signature
     ///      cannot be replayed by reentering from a target.
+    ///
+    ///      Nonce consumption and the batch share one transaction, so the nonce is spent only when
+    ///      the batch runs to completion: a reverting `_executeBatch` rolls the increment back and
+    ///      both the nonce and the signature stay valid. This is where the EOA analogy stops — a
+    ///      mined EOA transaction spends its nonce either way — so a batch that failed on a transient
+    ///      condition stays executable once that condition clears, indefinitely at `deadline` 0. Sign
+    ///      a short, non-zero `deadline`, or retire the signature with `manager.useNonce()`.
     function _verifySignedBatch(bytes32 mode, Call[] memory calls, bytes memory opData) private {
         (uint256 deadline, bytes memory signature) = abi.decode(opData, (uint256, bytes));
 
