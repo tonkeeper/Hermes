@@ -432,10 +432,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      first failure reverts and bubbles up the callee's raw revert data; `policies` is never
     ///      consulted. With `tryExec` true, call `i`'s 2-bit policy (bits [2i+1:2i] of `policies`)
     ///      decides what its outcome does — the four policies are described in the contract
-    ///      docstring. Both early terminations emit `BatchInterrupted(i)` at the single break site. A policy is only consulted for a call
-    ///      that is reached: a break earlier in the batch skips every later call, whatever its policy.
-    ///      Try batches are capped at `MAX_TRY_CALLS` so every call has a policy slot; the default
-    ///      exec type has no cap.
+    ///      docstring. Both early terminations emit `BatchInterrupted(i)` at the single break site.
+    ///      A policy is only consulted for a call that is reached: a break earlier in the batch skips
+    ///      every later call, whatever its policy. Try batches are capped at `MAX_TRY_CALLS` so every
+    ///      call has a policy slot; the default exec type has no cap.
     ///      Per ERC-7821, a `Call.target` of `address(0)` is executed against this account; on the
     ///      signed path `_hashCalls` canonicalizes it identically, so the signed and the executed
     ///      target are always the same address.
