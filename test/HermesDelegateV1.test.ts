@@ -460,11 +460,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 policyAt(3, POLICY_BREAK_ON_FAIL);
 
             for (const withOpData of [false, true]) {
-                const [isValid, policies] = await delegate.decodeCallPolicies(
-                    modeTryWithPolicies(packed, withOpData),
-                    4,
-                );
-                expect(isValid).to.equal(true);
+                const policies = await delegate.decodeCallPolicies(modeTryWithPolicies(packed, withOpData), 4);
                 expect(policies.map(Number)).to.deep.equal([3, 0, 1, 2]);
             }
         });
@@ -474,26 +470,26 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
         // the encoding through this view before requesting a signature is what surfaces that.
         it("decodeCallPolicies() reads unset slots as OPTIONAL", async () => {
             const { delegate } = await setup();
-            const [, policies] = await delegate.decodeCallPolicies(
+            const policies = await delegate.decodeCallPolicies(
                 modeTryWithPolicies(policyAt(0, POLICY_REVERT_ON_FAIL), false),
                 3,
             );
             expect(policies.map(Number)).to.deep.equal([1, 0, 0]);
         });
 
-        // The decoder is not a second validator: it reports what `execute` would reject instead of
-        // reverting, so decoding never has to be wrapped in a try/catch.
-        it("decodeCallPolicies() reports rejection through isValid instead of reverting", async () => {
+        // The decoder is not a second validator: what `execute` would reject comes back as an empty
+        // array, so decoding never has to be wrapped in a try/catch.
+        it("decodeCallPolicies() returns an empty array for what execute would reject", async () => {
             const { delegate } = await setup();
 
             for (const mode of [MODE_SINGLE, MODE_BATCH_OF_BATCHES, MODE_DELEGATECALL, MODE_EXEC_TYPE_2]) {
-                expect((await delegate.decodeCallPolicies(mode, 1))[0]).to.equal(false);
+                expect((await delegate.decodeCallPolicies(mode, 1)).length).to.equal(0);
             }
 
             // Try mode is capped at the payload's 88 policy slots; the default exec type has no cap.
-            expect((await delegate.decodeCallPolicies(MODE_BATCH_TRY, 88))[0]).to.equal(true);
-            expect((await delegate.decodeCallPolicies(MODE_BATCH_TRY, 89))[0]).to.equal(false);
-            expect((await delegate.decodeCallPolicies(MODE_BATCH, 89))[0]).to.equal(true);
+            expect((await delegate.decodeCallPolicies(MODE_BATCH_TRY, 88)).length).to.equal(88);
+            expect((await delegate.decodeCallPolicies(MODE_BATCH_TRY, 89)).length).to.equal(0);
+            expect((await delegate.decodeCallPolicies(MODE_BATCH, 89)).length).to.equal(89);
         });
 
         it("eip712Domain() (ERC-5267) returns the domain the signed paths use", async () => {

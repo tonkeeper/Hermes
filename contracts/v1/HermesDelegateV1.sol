@@ -362,30 +362,31 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @notice Unpacks the per-call try-mode policies packed into `mode`'s payload, so an integrator
     ///         can round-trip its own encoder against the contract before asking a user to sign.
     /// @dev Mirrors what `_executeBatch` reads: call `i`'s 2-bit policy sits at bits [2i+1:2i] of the
-    ///      mode payload, least-significant-bit first. Reports rejection through `isValid` instead of
-    ///      reverting, so decoding a mode never has to be wrapped in a try/catch. The payload is only
+    ///      mode payload, least-significant-bit first. Reports rejection with an empty array instead
+    ///      of reverting, so decoding a mode never has to be wrapped in a try/catch. The payload is only
     ///      consulted under the try exec type; under the default one the first failing call reverts
     ///      the batch whatever these bits say.
     /// @param mode ERC-7821 execution mode whose payload to unpack.
     /// @param callCount Number of calls in the batch this `mode` is meant to execute.
-    /// @return isValid Whether `execute` accepts this pair: a supported single-batch mode, and — in
-    ///         try mode — a batch that fits the payload's `MAX_TRY_CALLS` policy slots.
     /// @return policies Policy governing each call: `policies[i]` is 0 OPTIONAL, 1 REVERT_ON_FAIL,
     ///         2 BREAK_ON_FAIL or 3 BREAK_ON_SUCCESS. Slots the encoder never set read as OPTIONAL,
     ///         which is why an under-specified encoding is well-formed on-chain and shows up only by
-    ///         comparing this output against the intended policies.
+    ///         comparing this output against the intended policies. Empty when `execute` would reject
+    ///         the pair — an unsupported `mode`, or a try batch above `MAX_TRY_CALLS`.
     function decodeCallPolicies(bytes32 mode, uint256 callCount)
         external
         pure
-        returns (bool isValid, uint8[] memory policies)
+        returns (uint8[] memory policies)
     {
         (ModeId id, bool tryExec, uint176 payload) = _decodeExecutionMode(mode);
+        bool accepted = id != ModeId.Unsupported && (!tryExec || callCount <= MAX_TRY_CALLS);
 
-        isValid = id != ModeId.Unsupported && (!tryExec || callCount <= MAX_TRY_CALLS);
-        policies = new uint8[](callCount);
+        if (accepted) {
+            policies = new uint8[](callCount);
 
-        for (uint256 i; i < callCount; ++i) {
-            policies[i] = uint8((uint256(payload) >> (POLICY_BITS * i)) & POLICY_MASK);
+            for (uint256 i; i < callCount; ++i) {
+                policies[i] = uint8((uint256(payload) >> (POLICY_BITS * i)) & POLICY_MASK);
+            }
         }
     }
 
