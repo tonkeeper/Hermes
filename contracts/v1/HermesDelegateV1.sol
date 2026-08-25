@@ -236,7 +236,12 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///                          over `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)`,
     ///                          replay-protected by the Hermes nonce and rejected once `block.timestamp`
     ///                          passes `deadline`. The nonce is consumed before any external call, so the
-    ///                          signature cannot be replayed by reentering from a target.
+    ///                          signature cannot be replayed by reentering from a target. A signed
+    ///                          batch consumes *at least* one nonce: the manager keys nonces by
+    ///                          `msg.sender`, which under EIP-7702 is the account here and for a call
+    ///                          inside the batch alike, so a batch that itself calls `useNonce`
+    ///                          advances the counter again. Read `nonceOf(account)` rather than
+    ///                          tracking it incrementally.
     ///         Both modes accept exec type `0x00` (atomic: revert and bubble up on the first failing
     ///         call) and `0x01` ("try": each call's outcome is governed by its 2-bit policy in the
     ///         mode payload [10:32] — OPTIONAL `00` log-and-continue, REQUIRED `01` revert the whole
