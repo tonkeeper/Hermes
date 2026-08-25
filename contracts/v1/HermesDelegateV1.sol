@@ -66,6 +66,8 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *
  *      State surface: immutable `delegateAddress` (implementation pin for EIP-712 salt) and
  *      immutable `manager` (singleton nonce source). No mutable storage.
+ *
+ * @custom:security-contact bugs@tonkeeper.com
  */
 contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 {
 

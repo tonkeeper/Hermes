@@ -10,6 +10,7 @@ import {IERC7779} from "./interfaces/IERC7779.sol";
 /**
  * @title HermesBase - Token-receiver and ERC-7779 surface for Hermes delegates.
  * @author anchupin
+ * @custom:security-contact bugs@tonkeeper.com
  */
 abstract contract HermesBase is IERC165, IERC7779, IERC721Receiver, IERC1155Receiver {
 
