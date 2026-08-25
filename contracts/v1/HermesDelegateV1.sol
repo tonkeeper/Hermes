@@ -373,10 +373,11 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev Decodes an ERC-7821 `mode` via `ERC7579Utils.decodeMode` and classifies it against the
     ///      supported single-batch modes. The payload is ignored for classification and returned
     ///      raw — in try mode it carries the packed per-call policies (see `execute`).
-    /// @return id `Batch` (no opData), `BatchOpData` (with opData), or `Unsupported` (fails closed).
-    /// @return tryExec True for exec type `0x01` (continue past failing calls), false for `0x00`.
-    /// @return payload The mode payload (bytes [10:32]) as an integer.
-    function _decodeExecutionMode(bytes32 mode) private pure returns (ModeId id, bool tryExec, uint176 payload) {
+    /// @return The mode's classification: `Batch` (no opData), `BatchOpData` (with opData), or
+    ///         `Unsupported` (fails closed).
+    /// @return True for exec type `0x01` (continue past failing calls), false for `0x00`.
+    /// @return The mode payload (bytes [10:32]) as an integer.
+    function _decodeExecutionMode(bytes32 mode) private pure returns (ModeId, bool, uint176) {
         (CallType callType, ExecType execType, ModeSelector modeSelector, ModePayload modePayload) =
             ERC7579Utils.decodeMode(Mode.wrap(mode));
 
@@ -385,13 +386,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         }
 
         bool defaultExec = execType == ERC7579Utils.EXECTYPE_DEFAULT;
-        tryExec = execType == ERC7579Utils.EXECTYPE_TRY;
+        bool tryExec = execType == ERC7579Utils.EXECTYPE_TRY;
 
         if (!defaultExec && !tryExec) {
             return (ModeId.Unsupported, false, 0);
         }
 
-        payload = uint176(ModePayload.unwrap(modePayload));
+        uint176 payload = uint176(ModePayload.unwrap(modePayload));
 
         if (modeSelector == MODE_SELECTOR_NO_OPDATA) {
             return (ModeId.Batch, tryExec, payload);
@@ -612,7 +613,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
             uint256[] memory extensions
         )
     {
-        return (hex"1f", "Hermes", "v1.0.0", block.chainid, address(this), delegateAddress, new uint256[](0));
+        fields = hex"1f";
+        name = "Hermes";
+        version = "v1.0.0";
+        chainId = block.chainid;
+        verifyingContract = address(this);
+        salt = delegateAddress;
+        extensions = new uint256[](0);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
