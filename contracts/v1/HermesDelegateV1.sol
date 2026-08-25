@@ -242,6 +242,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev Only userOps whose callData targets `execute` are accepted, so a validated op can never be
     ///      coupled with an arbitrary execution path. Per ERC-4337 a bad signature returns 1
     ///      (SIG_VALIDATION_FAILED) instead of reverting.
+    ///
+    ///      The signature covers the bare `userOpHash`, which does not commit to the code at the
+    ///      account's address, so a withheld userOp survives re-delegation and is retired only by
+    ///      consuming its EntryPoint nonce.
     /// @param userOp The user operation being validated; only `callData` (selector check) and
     ///        `signature` are read.
     /// @param userOpHash The EntryPoint's EIP-712 typed hash of `userOp`, signed by the EOA as-is.
@@ -436,12 +440,9 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      signed path `_hashCalls` canonicalizes it identically, so the signed and the executed
     ///      target are always the same address.
     ///
-    ///      A non-fatal failure is logged as `CallFailed(i)` — the index only, with no return data
-    ///      copied. The callee alone chooses how many bytes it reverts with while the submitter pays
-    ///      to copy and log them, so logging them would let any target in the batch out-of-gas a try
-    ///      batch that is supposed to survive its failure. A fatal failure still bubbles the callee's
-    ///      raw data: there the whole transaction reverts either way, so the callee is only choosing
-    ///      the gas of a batch that already failed.
+    ///      A non-fatal failure is recorded as `CallFailed(i)`: the log says that call `i` failed and
+    ///      which one it was, and the reason is investigated off-chain from the transaction itself.
+    ///      A fatal failure still bubbles the callee's raw revert data.
     function _executeBatch(Call[] memory calls, bool tryExec, uint256 policies) private {
         uint256 length = calls.length;
         if (tryExec && length > MAX_TRY_CALLS) {
@@ -450,15 +451,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
 
         for (uint256 i; i < length; ++i) {
             address target = calls[i].target == address(0) ? address(this) : calls[i].target;
-            uint256 value = calls[i].value;
-            bytes memory data = calls[i].data;
-            bool success;
-
-            // Raw call: copies no return data, unlike `target.call(...)`, which copies all of it
-            // before the outcome is even inspected. Only `_bubbleRevert` reads it, and only fatally.
-            assembly ("memory-safe") {
-                success := call(gas(), target, value, add(data, 0x20), mload(data), 0x00, 0x00)
-            }
+            bool success = _call(target, calls[i].value, calls[i].data);
 
             // Classic atomic batch: the first failure reverts everything; `policies` plays no role.
             if (!tryExec) {
@@ -485,10 +478,17 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         }
     }
 
-    /// @dev Reverts with the failing callee's raw revert data (bubbles an inner revert). Reads it
-    ///      straight from the return buffer, so nothing is copied unless a call actually fails
-    ///      fatally. Writes above the free memory pointer without moving it, which is memory-safe
-    ///      because the frame reverts immediately.
+    /// @dev Calls `target` with `value` and `data`, discarding whatever it returns. Unlike
+    ///      `target.call(...)`, which copies all of the return data before the outcome is even
+    ///      inspected, this copies none of it — only `_bubbleRevert` reads the return buffer, and
+    ///      only when a call fails fatally.
+    function _call(address target, uint256 value, bytes memory data) private returns (bool success) {
+        assembly ("memory-safe") {
+            success := call(gas(), target, value, add(data, 0x20), mload(data), 0x00, 0x00)
+        }
+    }
+
+    /// @dev Reverts with the failing callee's raw revert data (bubbles an inner revert).
     function _bubbleRevert() private pure {
         assembly ("memory-safe") {
             let ptr := mload(0x40)
@@ -597,9 +597,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev `delegateAddress` pins the signature to the implementation address, so an outstanding
     ///      signature stops validating while the account is delegated to other code, and validates
     ///      again once it is delegated back: the salt is checked against the delegation in effect at
-    ///      execution time, and the nonce survives re-delegation. Re-delegation is a suspension;
-    ///      the permanent cancellations are spending the nonce and letting `deadline` pass. `validateUserOp` is not pinned at all — `userOpHash`
-    ///      does not commit to the account's code — so a withheld userOp survives re-delegation too.
+    ///      execution time, and the nonce survives re-delegation. Re-delegation is a suspension; the
+    ///      permanent cancellations are spending the nonce and letting `deadline` pass.
     function _domainSeparator() private view returns (bytes32) {
         return keccak256(
             abi.encode(

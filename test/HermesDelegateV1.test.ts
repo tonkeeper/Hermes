@@ -734,11 +734,6 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             await expect(tx).to.not.emit(userAsDelegate, "BatchInterrupted");
         });
 
-        // L-04 regression. A callee alone chooses how many bytes it reverts with, and the caller pays
-        // to copy and log them (3 gas/word copied, 8 gas/byte logged). Logging them unbounded turns a
-        // non-fatal try-mode failure into an out-of-gas revert of the whole transaction, rolling back
-        // the calls that already succeeded. The explicit 1M gas limit is the assertion: a 500 KB
-        // payload could not fit through it.
         it("try mode survives a return-bombing call: only the index is logged, the batch continues", async () => {
             const { admin, user, userAsDelegate, counter, counterAddr } = await setup();
             const bomber = await deployContract<Counter>("ReturnBomber" as never, [], admin);
