@@ -6,8 +6,8 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
 /**
  * @title HermesV1 - Singleton nonce manager for Hermes delegates.
  * @author anchupin
- * @notice Sole source of replay protection for the signature-based execution path
- *         (`HermesDelegateV1.executeWithSignature`). Deployed once and shared by every
+ * @notice Sole source of replay protection for the signature-based execution path — the `opData`
+ *         mode of `HermesDelegateV1.execute`. Deployed once and shared by every
  *         Hermes-delegated account; each account's nonce is isolated by `msg.sender`.
  *
  * @dev Design and trust model:
@@ -18,7 +18,7 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *        The returned (pre-increment) value is the nonce a delegate folds into the EIP-712
  *        `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)` struct hash, binding each
  *        signature to exactly one slot in the sequence.
- *      - **Signature lifecycle (EOA-like).** A pending `executeWithSignature` signature stays valid
+ *      - **Signature lifecycle (EOA-like).** A pending signed-batch signature stays valid
  *        until its nonce is consumed; advancing the nonce (e.g. the EOA calling `useNonce()`
  *        directly, or executing any signed batch) invalidates it, mirroring how replacing a pending
  *        EOA transaction spends the account nonce. This manager imposes no expiry of its own; the
