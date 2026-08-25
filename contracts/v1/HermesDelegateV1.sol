@@ -523,11 +523,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      Returns the ERC-7739 detection magic for the empty-signature probe.
     ///
     ///      The raw fallback is checked last, so an ERC-7739-aware wallet keeps the nested,
-    ///      domain-bound path unchanged. It exists because verifiers route an account with code into
-    ///      ERC-1271 by `code.length`, so after delegation every signature the key produces lands
-    ///      here, including from wallets that do not implement ERC-7739. Its trade-off is that a raw
-    ///      signature carries no domain: it is replayable at any verifier asking this account about
-    ///      the same `hash`, though recovery to `address(this)` keeps it bound to this account.
+    ///      domain-bound path unchanged.
     /// @param hash The digest the verifier wants checked, or `0x7739…7739` for the ERC-7739 probe.
     /// @param signature One of the two ERC-7739 nested encodings, a raw ECDSA signature over `hash`
     ///        (65-byte or EIP-2098 compact), or empty for the probe.
