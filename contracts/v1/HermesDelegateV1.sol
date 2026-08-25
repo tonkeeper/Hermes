@@ -299,9 +299,9 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///         mode payload [10:32] — OPTIONAL `00` log-and-continue, REVERT_ON_FAIL `01` revert the
     ///         whole batch, BREAK_ON_FAIL `10` log and end the batch early, BREAK_ON_SUCCESS `11` end
     ///         the batch early once the call succeeds, log-and-continue while it fails; either early
-    ///         termination emits `BatchInterrupted`). A policy decides what a call's outcome does, not
-    ///         whether it is reached. The exec type and policies are part of `mode`
-    ///         and therefore bound into the signed digest.
+    ///         termination emits `BatchInterrupted`). A policy decides what a call's outcome does,
+    ///         not whether it is reached. The exec type and policies are part of `mode` and
+    ///         therefore bound into the signed digest.
     /// @param mode ERC-7821 execution mode; only the two single-batch modes are supported.
     /// @param executionData `abi.encode(Call[] calls)` for the no-`opData` mode, or
     ///        `abi.encode(Call[] calls, bytes opData)` for the `opData` mode, where `opData` is itself
@@ -378,7 +378,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @param callCount Number of calls in the batch this `mode` is meant to execute.
     /// @return isValid Whether `execute` accepts this pair: a supported single-batch mode, and — in
     ///         try mode — a batch that fits the payload's `MAX_TRY_CALLS` policy slots.
-    /// @return policies Policy governing each call: `policies[i]` is 0 OPTIONAL, 1 REQUIRED,
+    /// @return policies Policy governing each call: `policies[i]` is 0 OPTIONAL, 1 REVERT_ON_FAIL,
     ///         2 BREAK_ON_FAIL or 3 BREAK_ON_SUCCESS. Slots the encoder never set read as OPTIONAL,
     ///         which is why an under-specified encoding is well-formed on-chain and shows up only by
     ///         comparing this output against the intended policies.
@@ -393,7 +393,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         policies = new uint8[](callCount);
 
         for (uint256 i; i < callCount; ++i) {
-            policies[i] = uint8((uint256(payload) >> (2 * i)) & 3);
+            policies[i] = uint8((uint256(payload) >> (POLICY_BITS * i)) & POLICY_MASK);
         }
     }
 
@@ -441,8 +441,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      BREAK_ON_SUCCESS success ends the batch early. Both early terminations emit
     ///      `BatchInterrupted(i)` at the single break site. A policy is only consulted for a call
     ///      that is reached: a break earlier in the batch skips every later call, whatever its policy.
-    ///      Try batches are capped at
-    ///      `MAX_TRY_CALLS` so every call has a policy slot; the default exec type has no cap.
+    ///      Try batches are capped at `MAX_TRY_CALLS` so every call has a policy slot; the default
+    ///      exec type has no cap.
     ///      Per ERC-7821, a `Call.target` of `address(0)` is executed against this account; on the
     ///      signed path `_hashCalls` canonicalizes it identically, so the signed and the executed
     ///      target are always the same address.

@@ -456,7 +456,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             const { delegate } = await setup();
             const packed =
                 policyAt(0, POLICY_BREAK_ON_SUCCESS) |
-                policyAt(2, POLICY_REQUIRED) |
+                policyAt(2, POLICY_REVERT_ON_FAIL) |
                 policyAt(3, POLICY_BREAK_ON_FAIL);
 
             for (const withOpData of [false, true]) {
@@ -470,12 +470,12 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
         });
 
         // A batch longer than the policies its mode specifies is well-formed on-chain — the missing
-        // slots read as OPTIONAL, so a call meant to be REQUIRED silently is not. Round-tripping the
-        // encoding through this view before requesting a signature is what surfaces that.
+        // slots read as OPTIONAL, so a call meant to be REVERT_ON_FAIL silently is not. Round-tripping
+        // the encoding through this view before requesting a signature is what surfaces that.
         it("decodeCallPolicies() reads unset slots as OPTIONAL", async () => {
             const { delegate } = await setup();
             const [, policies] = await delegate.decodeCallPolicies(
-                modeTryWithPolicies(policyAt(0, POLICY_REQUIRED), false),
+                modeTryWithPolicies(policyAt(0, POLICY_REVERT_ON_FAIL), false),
                 3,
             );
             expect(policies.map(Number)).to.deep.equal([1, 0, 0]);
