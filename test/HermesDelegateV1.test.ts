@@ -113,6 +113,12 @@ const CALLS_TYPE = "tuple(address target,uint256 value,bytes data)[]";
 const encodeBatch = (calls: Call[]): string => abi.encode([CALLS_TYPE], [calls]);
 const encodeBatchWithOpData = (calls: Call[], opData: string): string =>
     abi.encode([CALLS_TYPE, "bytes"], [calls, opData]);
+// A self-call is signed under the account's real address; `_hashCalls` canonicalizes `address(0)`
+// to `address(this)`, so a submitter may shrink a self-call target to the zero-address shorthand in
+// calldata and the digest stays the same. This models that submitter-side rewrite.
+const withZeroSelfTarget = (calls: Call[], eoa: Address): Call[] =>
+    calls.map((c) => (c.target === eoa ? { ...c, target: ethers.ZeroAddress as Address } : c));
+
 // opData envelope for the signed path: `abi.encode(uint256 deadline, bytes signature)`.
 const encodeOpData = (deadline: bigint, signature: string): string =>
     abi.encode(["uint256", "bytes"], [deadline, signature]);
@@ -1192,8 +1198,9 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                     data: token.interface.encodeFunctionData("transfer", [relayer, fee]),
                 },
                 {
-                    // target 0x0 -> address(this) per ERC-7821: the account calls itself in try mode.
-                    target: ethers.ZeroAddress as Address,
+                    // The account calls itself in try mode. Signed under its real address; the
+                    // submitter below shrinks it to the `address(0)` shorthand (same digest).
+                    target: user.address as Address,
                     value: 0n,
                     data: userAsDelegate.interface.encodeFunctionData("execute", [
                         MODE_BATCH_TRY,
@@ -1217,7 +1224,13 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             const relayerBalanceBefore = await token.balanceOf(relayer);
             const tx = await userAsDelegate
                 .connect(admin)
-                .execute(MODE_BATCH_OPDATA, encodeBatchWithOpData(calls, encodeOpData(FAR_FUTURE, sig)));
+                .execute(
+                    MODE_BATCH_OPDATA,
+                    encodeBatchWithOpData(
+                        withZeroSelfTarget(calls, user.address as Address),
+                        encodeOpData(FAR_FUTURE, sig),
+                    ),
+                );
             expectSuccess((await tx.wait()) as ContractTransactionReceipt);
 
             // Fee survived the failing user call; the non-failing user call still landed.
@@ -1253,7 +1266,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                     data: token.interface.encodeFunctionData("transfer", [relayer, fee]),
                 },
                 {
-                    target: ethers.ZeroAddress as Address,
+                    target: user.address as Address,
                     value: 0n,
                     data: userAsDelegate.interface.encodeFunctionData("execute", [
                         MODE_BATCH_TRY,
@@ -1279,9 +1292,14 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             // pays exactly this much — the burner consumes everything forwarded to it.
             const tx = await userAsDelegate
                 .connect(admin)
-                .execute(MODE_BATCH_OPDATA, encodeBatchWithOpData(calls, encodeOpData(FAR_FUTURE, sig)), {
-                    gasLimit: 1_000_000,
-                });
+                .execute(
+                    MODE_BATCH_OPDATA,
+                    encodeBatchWithOpData(
+                        withZeroSelfTarget(calls, user.address as Address),
+                        encodeOpData(FAR_FUTURE, sig),
+                    ),
+                    { gasLimit: 1_000_000 },
+                );
             const receipt = (await tx.wait()) as ContractTransactionReceipt;
             expectSuccess(receipt);
 
@@ -1670,6 +1688,89 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expectSuccess((await tx.wait()) as ContractTransactionReceipt);
             expect(await counter.value()).to.equal(13n);
             expect(await guard.nonceOf(user.address)).to.equal(nonce + 1n);
+        });
+
+        it("self-call target: signed as address(this), submittable as the address(0) shorthand", async () => {
+            const { admin, user, userAsDelegate, guard, counter, counterAddr, chainId, implAddr } = await setup();
+
+            // A nested self-call, signed under the account's own address — what the wallet renders.
+            const calls: Call[] = [
+                {
+                    target: user.address as Address,
+                    value: 0n,
+                    data: userAsDelegate.interface.encodeFunctionData("execute", [
+                        MODE_BATCH,
+                        encodeBatch([bumpCall(counter, 7n, counterAddr)]),
+                    ]),
+                },
+            ];
+            const nonce = await guard.nonceOf(user.address);
+            const sig = signRaw(
+                user,
+                computeExecDigest({
+                    mode: MODE_BATCH_OPDATA,
+                    calls,
+                    nonce,
+                    deadline: FAR_FUTURE,
+                    chainId,
+                    eoa: user.address as Address,
+                    implAddr,
+                }),
+            );
+
+            // The submitter shrinks the target to `address(0)`: `_hashCalls` canonicalizes it back,
+            // so the same signature validates over the shorter calldata.
+            const tx = await userAsDelegate
+                .connect(admin)
+                .execute(
+                    MODE_BATCH_OPDATA,
+                    encodeBatchWithOpData(
+                        withZeroSelfTarget(calls, user.address as Address),
+                        encodeOpData(FAR_FUTURE, sig),
+                    ),
+                );
+            expectSuccess((await tx.wait()) as ContractTransactionReceipt);
+            expect(await counter.value()).to.equal(7n);
+        });
+
+        it("self-call target: a signature over a literal address(0) target does NOT validate", async () => {
+            const { admin, user, userAsDelegate, guard, counter, counterAddr, chainId, implAddr } = await setup();
+
+            // Signing the zero address verbatim is the representation the canonicalization removes:
+            // there is exactly one signable form of a self-call, and it is `address(this)`.
+            const calls: Call[] = [
+                {
+                    target: ethers.ZeroAddress as Address,
+                    value: 0n,
+                    data: userAsDelegate.interface.encodeFunctionData("execute", [
+                        MODE_BATCH,
+                        encodeBatch([bumpCall(counter, 7n, counterAddr)]),
+                    ]),
+                },
+            ];
+            const nonce = await guard.nonceOf(user.address);
+            const sig = signRaw(
+                user,
+                computeExecDigest({
+                    mode: MODE_BATCH_OPDATA,
+                    calls,
+                    nonce,
+                    deadline: FAR_FUTURE,
+                    chainId,
+                    eoa: user.address as Address,
+                    implAddr,
+                }),
+            );
+
+            // Rejected under either calldata form — both hash to the canonical `address(this)`.
+            for (const submitted of [calls, [{ ...calls[0], target: user.address as Address }]]) {
+                await expect(
+                    userAsDelegate
+                        .connect(admin)
+                        .execute(MODE_BATCH_OPDATA, encodeBatchWithOpData(submitted, encodeOpData(FAR_FUTURE, sig))),
+                ).to.be.revertedWithCustomError(userAsDelegate, "InvalidSignature");
+            }
+            expect(await counter.value()).to.equal(0n);
         });
 
         it("a pending signature is invalidated by consuming its nonce (EOA-style cancel)", async () => {
