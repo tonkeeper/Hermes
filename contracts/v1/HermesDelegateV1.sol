@@ -36,13 +36,13 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *      Both modes are also accepted with ERC-7579 exec type `0x01` ("try", `0x0101…`). In try mode
  *      the otherwise-unused mode payload (bytes [10:32]) carries a per-call outcome policy — 2 bits
  *      per call, call `i` at bits [2i+1:2i] counting from the least significant bit:
- *      - `00` OPTIONAL:         a failure emits `ERC7579TryExecuteFail` and the batch continues;
+ *      - `00` OPTIONAL:         a failure emits `CallFailed` and the batch continues;
  *                               a zero payload is thus the uniform try batch (standard try semantics).
  *      - `01` REVERT_ON_FAIL:   a failure reverts the whole batch, as in the default exec type.
- *      - `10` BREAK_ON_FAIL:    a failure emits `ERC7579TryExecuteFail` and ends the batch early —
+ *      - `10` BREAK_ON_FAIL:    a failure emits `CallFailed` and ends the batch early —
  *                               the remaining calls are skipped, the transaction still succeeds.
  *      - `11` BREAK_ON_SUCCESS: a success ends the batch early (remaining calls are skipped, the
- *                               transaction succeeds); a failure emits `ERC7579TryExecuteFail` and
+ *                               transaction succeeds); a failure emits `CallFailed` and
  *                               the batch continues — "try fallbacks until one lands".
  *      Either early termination emits `BatchInterrupted(i)`, so a log consumer sees that the
  *      batch stopped short, and where, without decoding the policy bits out of `mode`.
@@ -70,13 +70,20 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         bytes data;
     }
 
+    /// @notice A try-mode call failed non-fatally: call `index` failed and its policy is not
+    ///         REVERT_ON_FAIL, so the batch continued (OPTIONAL, BREAK_ON_SUCCESS) or stopped after it
+    ///         (BREAK_ON_FAIL). Carries the index only: the callee chooses how many bytes it reverts
+    ///         with and the submitter pays 8 gas per logged byte, so logging them lets any target set
+    ///         the transaction's gas cost. The reason stays recoverable by simulating the call.
+    /// @param index Index of the call that failed.
+    event CallFailed(uint256 index);
+
     /// @notice A try-mode batch ended early: call `index` matched its break policy and the calls
     ///         after it were skipped. Emitted for both break policies — BREAK_ON_FAIL when call
-    ///         `index` failed (right after its `ERC7579TryExecuteFail`, which carries the revert
-    ///         data) and BREAK_ON_SUCCESS when it succeeded — so early termination is readable from
-    ///         logs alone, without decoding the policy bits out of `mode`. `ERC7579TryExecuteFail`
-    ///         on its own does not imply termination: an OPTIONAL failure emits the same event and
-    ///         the batch continues.
+    ///         `index` failed (right after its `CallFailed`) and BREAK_ON_SUCCESS when it
+    ///         succeeded — so early termination is readable from logs alone, without decoding the
+    ///         policy bits out of `mode`. `CallFailed` on its own does not imply termination: an
+    ///         OPTIONAL failure emits it too and the batch continues.
     /// @param index Index of the call that ended the batch; calls `index + 1 …` did not run.
     event BatchInterrupted(uint256 index);
 
@@ -143,7 +150,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     uint256 private constant MAX_TRY_CALLS = 88;
 
     // ─── Per-call try-mode policies (2 bits each; call `i` at bits [2i+1:2i] of the payload) ───
-    /// @dev `00`: a failure is logged via `ERC7579TryExecuteFail` and the batch continues.
+    /// @dev `00`: a failure is logged via `CallFailed` and the batch continues.
     uint256 private constant POLICY_OPTIONAL = 0x0;
     /// @dev `01`: a failure reverts the whole batch, as in the default exec type. Named for what it
     ///      does on failure, not for a guarantee of execution — a preceding break policy can skip it.
@@ -345,10 +352,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     }
 
     /// @dev Executes each call in order. With `tryExec` false — the classic atomic batch — the
-    ///      first failure reverts and bubbles up its raw revert data; `policies` is never
+    ///      first failure reverts and bubbles up the callee's raw revert data; `policies` is never
     ///      consulted. With `tryExec` true, call `i`'s 2-bit policy (bits [2i+1:2i] of `policies`)
     ///      decides what its outcome does: a REVERT_ON_FAIL failure reverts the whole batch; an OPTIONAL
-    ///      or BREAK_ON_SUCCESS failure is logged via `ERC7579TryExecuteFail` and the batch
+    ///      or BREAK_ON_SUCCESS failure is logged via `CallFailed` and the batch
     ///      continues; a BREAK_ON_FAIL failure is logged and ends the batch early; a
     ///      BREAK_ON_SUCCESS success ends the batch early. Both early terminations emit
     ///      `BatchInterrupted(i)` at the single break site. A policy is only consulted for a call
@@ -356,6 +363,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      Try batches are capped at
     ///      `MAX_TRY_CALLS` so every call has a policy slot; the default exec type has no cap.
     ///      Per ERC-7821, a `Call.target` of `address(0)` is executed against this account.
+    ///
+    ///      A non-fatal failure is logged as `CallFailed(i)` — the index only, with no return data
+    ///      copied. The callee alone chooses how many bytes it reverts with while the submitter pays
+    ///      to copy and log them, so logging them would let any target in the batch out-of-gas a try
+    ///      batch that is supposed to survive its failure. A fatal failure still bubbles the callee's
+    ///      raw data: there the whole transaction reverts either way, so the callee is only choosing
+    ///      the gas of a batch that already failed.
     function _executeBatch(Call[] memory calls, bool tryExec, uint256 policies) private {
         uint256 length = calls.length;
         if (tryExec && length > MAX_TRY_CALLS) {
@@ -364,12 +378,20 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
 
         for (uint256 i; i < length; ++i) {
             address target = calls[i].target == address(0) ? address(this) : calls[i].target;
-            (bool success, bytes memory result) = target.call{value: calls[i].value}(calls[i].data);
+            uint256 value = calls[i].value;
+            bytes memory data = calls[i].data;
+            bool success;
+
+            // Raw call: copies no return data, unlike `target.call(...)`, which copies all of it
+            // before the outcome is even inspected. Only `_bubbleRevert` reads it, and only fatally.
+            assembly ("memory-safe") {
+                success := call(gas(), target, value, add(data, 0x20), mload(data), 0x00, 0x00)
+            }
 
             // Classic atomic batch: the first failure reverts everything; `policies` plays no role.
             if (!tryExec) {
                 if (!success) {
-                    _bubbleRevert(result);
+                    _bubbleRevert();
                 }
                 continue;
             }
@@ -378,10 +400,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
 
             if (!success) {
                 if (policy == POLICY_REVERT_ON_FAIL) {
-                    _bubbleRevert(result);
+                    _bubbleRevert();
                 }
 
-                emit ERC7579Utils.ERC7579TryExecuteFail(i, result);
+                emit CallFailed(i);
             }
 
             if (policy == (success ? POLICY_BREAK_ON_SUCCESS : POLICY_BREAK_ON_FAIL)) {
@@ -391,10 +413,15 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         }
     }
 
-    /// @dev Reverts the transaction with `result` as the raw revert data (bubbles an inner revert).
-    function _bubbleRevert(bytes memory result) private pure {
-        assembly {
-            revert(add(result, 32), mload(result))
+    /// @dev Reverts with the failing callee's raw revert data (bubbles an inner revert). Reads it
+    ///      straight from the return buffer, so nothing is copied unless a call actually fails
+    ///      fatally. Writes above the free memory pointer without moving it, which is memory-safe
+    ///      because the frame reverts immediately.
+    function _bubbleRevert() private pure {
+        assembly ("memory-safe") {
+            let ptr := mload(0x40)
+            returndatacopy(ptr, 0x00, returndatasize())
+            revert(ptr, returndatasize())
         }
     }
 
