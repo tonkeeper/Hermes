@@ -293,6 +293,11 @@ function signRaw(wallet: HDNodeWallet, hash: string): string {
     return wallet.signingKey.sign(hash).serialized;
 }
 
+// The same signature in the 64-byte EIP-2098 `(r, vs)` encoding wallets and SDKs emit to save calldata.
+function signRawCompact(wallet: HDNodeWallet, hash: string): string {
+    return wallet.signingKey.sign(hash).compactSerialized;
+}
+
 async function delegateEoaToContract(
     user: HDNodeWallet,
     delegateAddress: Address,
@@ -1598,6 +1603,31 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await counter.value()).to.equal(11n);
         });
 
+        it("accepts a 64-byte EIP-2098 compact signature", async () => {
+            const { admin, user, userAsDelegate, guard, counter, counterAddr, chainId, implAddr } = await setup();
+
+            const calls: Call[] = [bumpCall(counter, 13n, counterAddr)];
+            const nonce = await guard.nonceOf(user.address);
+            const digest = computeExecDigest({
+                mode: MODE_BATCH_OPDATA,
+                calls,
+                nonce,
+                deadline: FAR_FUTURE,
+                chainId,
+                eoa: user.address as Address,
+                implAddr,
+            });
+            const compact = signRawCompact(user, digest);
+            expect(compact.length).to.equal(2 + 64 * 2);
+
+            const tx = await userAsDelegate
+                .connect(admin)
+                .execute(MODE_BATCH_OPDATA, encodeBatchWithOpData(calls, encodeOpData(FAR_FUTURE, compact)));
+            expectSuccess((await tx.wait()) as ContractTransactionReceipt);
+            expect(await counter.value()).to.equal(13n);
+            expect(await guard.nonceOf(user.address)).to.equal(nonce + 1n);
+        });
+
         it("a pending signature is invalidated by consuming its nonce (EOA-style cancel)", async () => {
             const {
                 admin,
@@ -2119,6 +2149,34 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await userAsDelegate.isValidSignature(msg, sig)).to.equal(ERC1271_FAILURE);
         });
 
+        // A verifier that is not ERC-7739-aware routes the account into ERC-1271 by `code.length` and
+        // passes a plain digest with a plain signature — including flows where the verifier applies
+        // the EIP-191 prefix itself and hands over the already-prefixed hash.
+        it("raw ECDSA: accepts a plain 65-byte signature by the account over `hash`", async () => {
+            const { user, userAsDelegate } = await setup();
+            const hash = keccak256(toUtf8Bytes("app digest"));
+            const sig = signRaw(user, hash);
+            expect(sig.length).to.equal(2 + 65 * 2);
+            expect(await userAsDelegate.isValidSignature(hash, sig)).to.equal(ERC1271_SUCCESS);
+        });
+
+        it("raw ECDSA: accepts the 64-byte EIP-2098 compact form of the same signature", async () => {
+            const { user, userAsDelegate } = await setup();
+            const hash = keccak256(toUtf8Bytes("app digest"));
+            const compact = signRawCompact(user, hash);
+            expect(compact.length).to.equal(2 + 64 * 2);
+            expect(await userAsDelegate.isValidSignature(hash, compact)).to.equal(ERC1271_SUCCESS);
+        });
+
+        it("raw ECDSA: rejects a plain signature by a stranger", async () => {
+            const { userAsDelegate } = await setup();
+            const stranger = Wallet.createRandom() as HDNodeWallet;
+            const hash = keccak256(toUtf8Bytes("app digest"));
+            for (const sig of [signRaw(stranger, hash), signRawCompact(stranger, hash)]) {
+                expect(await userAsDelegate.isValidSignature(hash, sig)).to.equal(ERC1271_FAILURE);
+            }
+        });
+
         // ANTI-DRIFT: the account domain the 7739 path uses MUST equal what ERC-5267 eip712Domain() reports.
         // Build the signature from the domain READ from the contract; acceptance proves the 7739 path and
         // the introspection getter agree on exactly one domain.
@@ -2216,6 +2274,24 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 expect(
                     await userAsDelegate.connect(ep).validateUserOp.staticCall(userOpBad, userOpHash, 0n),
                 ).to.equal(1n);
+            } finally {
+                await stopImpersonate(ENTRY_POINT_ADDR as Address);
+            }
+        });
+
+        it("validateUserOp accepts a 64-byte EIP-2098 compact signature", async () => {
+            const { user, userAsDelegate, counter, counterAddr } = await setup();
+            const ep = await impersonate(ENTRY_POINT_ADDR as Address);
+            try {
+                const innerCalldata = innerExecute(userAsDelegate, [bumpCall(counter, 1n, counterAddr)]);
+                const userOpHash = keccak256(toUtf8Bytes("compact 4337 hash"));
+                const compact = signRawCompact(user, userOpHash);
+                expect(compact.length).to.equal(2 + 64 * 2);
+
+                const userOp = emptyUserOp(user.address, innerCalldata, compact);
+                expect(
+                    await userAsDelegate.connect(ep).validateUserOp.staticCall(userOp, userOpHash, 0n),
+                ).to.equal(0n);
             } finally {
                 await stopImpersonate(ENTRY_POINT_ADDR as Address);
             }
