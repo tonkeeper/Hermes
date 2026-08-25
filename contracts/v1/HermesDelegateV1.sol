@@ -19,9 +19,7 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *      ERC-7821 minimal batch executor (`execute(bytes32 mode, bytes executionData)`) rather than
  *      bespoke per-flow selectors, so standard tooling (e.g. EIP-5792 `wallet_sendCalls`) can drive it.
  *
- *      Two ERC-7821 modes are supported, onto which the three authorization flows map — flows that
- *      a smart account usually splits across bespoke selectors (`executeBatch`, `executeUserOp`,
- *      `executeWithSignature` and the like) all funnel through this one entry point instead:
+ *      Two ERC-7821 modes are supported, carrying three authorization flows:
  *      - `0x01000000000000000000…` (batch, no `opData`): authorized by `msg.sender`.
  *          - The delegated EOA itself (self-call) — the plain batching flow.
  *          - The canonical EntryPoint — the ERC-4337 flow. Coupling is
@@ -32,9 +30,9 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *          where `signature` is the delegated EOA's EIP-712 signature over
  *          `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)`; replay-protected via the
  *          Hermes nonce and time-bounded by the signed `deadline` (a signature dies when its nonce is
- *          consumed or its deadline passes; a `deadline` of 0 disables expiry). A signed batch spends
- *          its nonce only when it runs to completion: the increment shares the transaction with the
- *          batch, so a mined batch that reverts rolls it back. The payload is a
+ *          consumed or its deadline passes; a `deadline` of 0 disables expiry). The nonce is spent
+ *          whenever the transaction does not revert — a batch ended early by a break policy spends it
+ *          too — and the increment shares the transaction, so a reverting batch rolls it back. The payload is a
  *          fully-typed struct, so signing wallets render targets, values and calldata — no opaque hashes.
  *
  *      Both modes are also accepted with ERC-7579 exec type `0x01` ("try", `0x0101…`). In try mode
@@ -48,8 +46,9 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *      - `11` BREAK_ON_SUCCESS: a success ends the batch early (remaining calls are skipped, the
  *                               transaction succeeds); a failure emits `CallFailed` and
  *                               the batch continues — "try fallbacks until one lands".
- *      Either early termination emits `BatchInterrupted(i)`, so a log consumer sees that the
- *      batch stopped short, and where, without decoding the policy bits out of `mode`. The packed
+ *      A non-fatal failure emits `CallFailed(i)`; either early termination additionally emits
+ *      `BatchInterrupted(i)`. A log consumer therefore sees which call failed and where the batch
+ *      stopped, without decoding the policy bits out of `mode`. The packed
  *      policies are readable back through the pure `decodeCallPolicies` view, so an integration can
  *      round-trip its encoder against the contract instead of reimplementing the bit layout.
  *
@@ -82,9 +81,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
 
     /// @notice A try-mode call failed non-fatally: call `index` failed and its policy is not
     ///         REVERT_ON_FAIL, so the batch continued (OPTIONAL, BREAK_ON_SUCCESS) or stopped after it
-    ///         (BREAK_ON_FAIL). Carries the index only: the callee chooses how many bytes it reverts
-    ///         with and the submitter pays 8 gas per logged byte, so logging them lets any target set
-    ///         the transaction's gas cost. The reason stays recoverable by simulating the call.
+    ///         (BREAK_ON_FAIL).
     /// @param index Index of the call that failed.
     event CallFailed(uint256 index);
 
@@ -142,8 +139,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev Trusted canonical ERC-4337 EntryPoints. Both produce an EIP-712 typed `userOpHash`
     ///      with the EntryPoint's own address as the EIP-712 `verifyingContract`, so a signature for
     ///      one EntryPoint never validates at the other — there is no cross-EntryPoint replay even
-    ///      though their nonce stores are independent. v0.7 is intentionally excluded: its
-    ///      `userOpHash` is a plain keccak (not EIP-712), which would need a different signature path.
+    ///      though their nonce stores are independent.
     address private constant ENTRY_POINT_V8 = 0x4337084D9E255Ff0702461CF8895CE9E3b5Ff108;
     address private constant ENTRY_POINT_V9 = 0x433709009B8330FDa32311DF1C2AFA402eD8D009;
 
@@ -175,8 +171,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     uint256 private constant POLICY_MASK = 3;
     /// @dev `00`: a failure is logged via `CallFailed` and the batch continues.
     uint256 private constant POLICY_OPTIONAL = 0x0;
-    /// @dev `01`: a failure reverts the whole batch, as in the default exec type. Named for what it
-    ///      does on failure, not for a guarantee of execution — a preceding break policy can skip it.
+    /// @dev `01`: a failure reverts the whole batch, as in the default exec type.
     uint256 private constant POLICY_REVERT_ON_FAIL = 0x1;
     /// @dev `10`: a failure is logged and ends the batch early; the transaction still succeeds.
     uint256 private constant POLICY_BREAK_ON_FAIL = 0x2;
@@ -287,8 +282,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///                          replay-protected by the Hermes nonce and rejected once `block.timestamp`
     ///                          passes `deadline`. The nonce is consumed before any of the batch's
     ///                          calls, so the signature cannot be replayed by reentering from a target.
-    ///                          That consumption is rolled back if the batch itself reverts, so the
-    ///                          nonce is spent only on success (see `_verifySignedBatch`). A signed
+    ///                          The nonce is spent unless the transaction reverts, which rolls the
+    ///                          consumption back with it (see `_verifySignedBatch`). A signed
     ///                          batch consumes *at least* one nonce: the manager keys nonces by
     ///                          `msg.sender`, which under EIP-7702 is the account here and for a call
     ///                          inside the batch alike, so a batch that itself calls `useNonce`
@@ -296,12 +291,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///                          tracking it incrementally.
     ///         Both modes accept exec type `0x00` (atomic: revert and bubble up on the first failing
     ///         call) and `0x01` ("try": each call's outcome is governed by its 2-bit policy in the
-    ///         mode payload [10:32] — OPTIONAL `00` log-and-continue, REVERT_ON_FAIL `01` revert the
-    ///         whole batch, BREAK_ON_FAIL `10` log and end the batch early, BREAK_ON_SUCCESS `11` end
-    ///         the batch early once the call succeeds, log-and-continue while it fails; either early
-    ///         termination emits `BatchInterrupted`). A policy decides what a call's outcome does,
-    ///         not whether it is reached. The exec type and policies are part of `mode` and
-    ///         therefore bound into the signed digest.
+    ///         mode payload, described in the contract docstring). The exec type and the policies are
+    ///         part of `mode` and therefore bound into the signed digest.
     /// @param mode ERC-7821 execution mode; only the two single-batch modes are supported.
     /// @param executionData `abi.encode(Call[] calls)` for the no-`opData` mode, or
     ///        `abi.encode(Call[] calls, bytes opData)` for the `opData` mode, where `opData` is itself
@@ -337,9 +328,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      `manager.useNonce()` call is the only external call that precedes them — so the signature
     ///      cannot be replayed by reentering from a target.
     ///
-    ///      Nonce consumption and the batch share one transaction, so the nonce is spent only when
-    ///      the batch runs to completion: a reverting `_executeBatch` rolls the increment back and
-    ///      both the nonce and the signature stay valid. This is where the EOA analogy stops — a
+    ///      Nonce consumption and the batch share one transaction, so the nonce is spent whenever
+    ///      the transaction does not revert — a batch ended early by a break policy spends it too.
+    ///      A reverting `_executeBatch` rolls the increment back, and the nonce and the signature
+    ///      both stay valid. This is where the EOA analogy stops — a
     ///      mined EOA transaction spends its nonce either way — so a batch that failed on a transient
     ///      condition stays executable once that condition clears, indefinitely at `deadline` 0. Sign
     ///      a short, non-zero `deadline`, or retire the signature with `manager.useNonce()`.
@@ -435,11 +427,8 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev Executes each call in order. With `tryExec` false — the classic atomic batch — the
     ///      first failure reverts and bubbles up the callee's raw revert data; `policies` is never
     ///      consulted. With `tryExec` true, call `i`'s 2-bit policy (bits [2i+1:2i] of `policies`)
-    ///      decides what its outcome does: a REVERT_ON_FAIL failure reverts the whole batch; an OPTIONAL
-    ///      or BREAK_ON_SUCCESS failure is logged via `CallFailed` and the batch
-    ///      continues; a BREAK_ON_FAIL failure is logged and ends the batch early; a
-    ///      BREAK_ON_SUCCESS success ends the batch early. Both early terminations emit
-    ///      `BatchInterrupted(i)` at the single break site. A policy is only consulted for a call
+    ///      decides what its outcome does — the four policies are described in the contract
+    ///      docstring. Both early terminations emit `BatchInterrupted(i)` at the single break site. A policy is only consulted for a call
     ///      that is reached: a break earlier in the batch skips every later call, whatever its policy.
     ///      Try batches are capped at `MAX_TRY_CALLS` so every call has a policy slot; the default
     ///      exec type has no cap.
@@ -606,11 +595,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     }
 
     /// @dev `delegateAddress` pins the signature to the implementation address, so an outstanding
-    ///      signature stops validating while the account is delegated to other code. That suspends,
-    ///      it does not cancel: the salt is checked against the delegation in effect at execution
-    ///      time and the nonce survives re-delegation, so an unspent, unexpired signature validates
-    ///      again once the account is delegated back here. Permanent cancellation is spending the
-    ///      nonce or letting `deadline` pass. `validateUserOp` is not pinned at all — `userOpHash`
+    ///      signature stops validating while the account is delegated to other code, and validates
+    ///      again once it is delegated back: the salt is checked against the delegation in effect at
+    ///      execution time, and the nonce survives re-delegation. Re-delegation is a suspension;
+    ///      the permanent cancellations are spending the nonce and letting `deadline` pass. `validateUserOp` is not pinned at all — `userOpHash`
     ///      does not commit to the account's code — so a withheld userOp survives re-delegation too.
     function _domainSeparator() private view returns (bytes32) {
         return keccak256(
