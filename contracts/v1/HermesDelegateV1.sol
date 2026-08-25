@@ -494,7 +494,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         isValid = (err == ECDSA.RecoverError.NoError && recovered == address(this));
     }
 
-    /// @dev delegateAddress pins the signature to the implementation address, so re-delegation invalidates old sigs.
+    /// @dev `delegateAddress` pins the signature to the implementation address, so an outstanding
+    ///      signature stops validating while the account is delegated to other code. That suspends,
+    ///      it does not cancel: the salt is checked against the delegation in effect at execution
+    ///      time and the nonce survives re-delegation, so an unspent, unexpired signature validates
+    ///      again once the account is delegated back here. Permanent cancellation is spending the
+    ///      nonce or letting `deadline` pass. `validateUserOp` is not pinned at all — `userOpHash`
+    ///      does not commit to the account's code — so a withheld userOp survives re-delegation too.
     function _domainSeparator() private view returns (bytes32) {
         return keccak256(
             abi.encode(
