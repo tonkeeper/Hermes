@@ -56,7 +56,12 @@ abstract contract HermesBase is IERC165, IERC7779, IERC721Receiver, IERC1155Rece
         return this.onERC1155BatchReceived.selector;
     }
 
-    /// @notice ERC-777 callback. No-op.
+    /// @notice ERC-777 `tokensReceived` callback. No-op.
+    /// @dev Unreachable until the account registers itself as its own `ERC777TokensRecipient` in the
+    ///      ERC-1820 registry: a delegated EOA has code, so an ERC-777 token treats it as a contract
+    ///      recipient and reverts the transfer when it finds no implementer. Self-registration via
+    ///      `execute` is accepted without the registry's `canImplementInterfaceForAddress` check.
+    ///      Hermes does not register on the account's behalf — that is a per-account, per-chain write.
     function tokensReceived(address, address, address, uint256, bytes calldata, bytes calldata) external pure {}
 
     /// @notice ERC-677 callback.
