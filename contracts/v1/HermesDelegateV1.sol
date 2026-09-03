@@ -225,6 +225,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev Only userOps whose callData targets `execute` are accepted, so a validated op can never be
     ///      coupled with an arbitrary execution path. Per ERC-4337 a bad signature returns 1
     ///      (SIG_VALIDATION_FAILED) instead of reverting.
+    ///
+    ///      The signature covers the bare `userOpHash`, which does not commit to the code at the
+    ///      account's address, so a withheld userOp survives re-delegation and is retired only by
+    ///      consuming its EntryPoint nonce.
     function validateUserOp(PackedUserOperation calldata userOp, bytes32 userOpHash, uint256 missingAccountFunds)
         external
         override
@@ -532,7 +536,11 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         isValid = (err == ECDSA.RecoverError.NoError && recovered == address(this));
     }
 
-    /// @dev delegateAddress pins the signature to the implementation address, so re-delegation invalidates old sigs.
+    /// @dev `delegateAddress` pins the signature to the implementation address, so an outstanding
+    ///      signature stops validating while the account is delegated to other code, and validates
+    ///      again once it is delegated back: the salt is checked against the delegation in effect at
+    ///      execution time, and the nonce survives re-delegation. Re-delegation is a suspension; the
+    ///      permanent cancellations are spending the nonce and letting `deadline` pass.
     function _domainSeparator() private view returns (bytes32) {
         return keccak256(
             abi.encode(
