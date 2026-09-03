@@ -6,6 +6,7 @@ pragma solidity 0.8.35;
  * @dev Verbatim surface of ERC-7779: a namespace identifier plus the storage bases the account's
  *      implementations claim, so a wallet can inspect an already-delegated account before
  *      re-delegating it.
+ * @custom:security-contact bugs@tonkeeper.com
  */
 interface IERC7779 {
 

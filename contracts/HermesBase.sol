@@ -11,8 +11,10 @@ import {IERC7779} from "./interfaces/IERC7779.sol";
  * @title HermesBase - Token-receiver and ERC-7779 surface for Hermes delegates.
  * @author anchupin
  * @dev Stateless base of every Hermes delegate: the token-receiver callbacks (ERC-721, ERC-1155,
- *      ERC-777, ERC-677), ERC-165 introspection over them, and the ERC-7779 surface a wallet reads
- *      before re-delegating. Every callback is a `pure` no-op returning only its acceptance value.
+ *      ERC-677, and an ERC-777 hook that fires only once the account self-registers in ERC-1820),
+ *      ERC-165 introspection over them, and the ERC-7779 surface a wallet reads before
+ *      re-delegating. Every callback is a `pure` no-op returning only its acceptance value.
+ * @custom:security-contact bugs@tonkeeper.com
  */
 abstract contract HermesBase is IERC165, IERC7779, IERC721Receiver, IERC1155Receiver {
 
@@ -77,7 +79,12 @@ abstract contract HermesBase is IERC165, IERC7779, IERC721Receiver, IERC1155Rece
     }
 
     /// @notice ERC-777 `tokensReceived` hook. No-op: the transfer is accepted as-is.
-    /// @dev The six arguments (operator, from, to, amount, userData, operatorData) are unused and
+    /// @dev Unreachable until the account registers itself as its own `ERC777TokensRecipient` in the
+    ///      ERC-1820 registry: a delegated EOA has code, so an ERC-777 token treats it as a contract
+    ///      recipient and reverts the transfer when it finds no implementer. Self-registration via
+    ///      `execute` is accepted without the registry's `canImplementInterfaceForAddress` check.
+    ///      Hermes does not register on the account's behalf — that is a per-account, per-chain write.
+    ///      The six arguments (operator, from, to, amount, userData, operatorData) are unused and
     ///      left unnamed. ERC-777 signals acceptance by not reverting, so there is no return value.
     function tokensReceived(address, address, address, uint256, bytes calldata, bytes calldata) external pure {}
 

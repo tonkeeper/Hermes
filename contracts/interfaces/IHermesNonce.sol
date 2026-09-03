@@ -5,6 +5,7 @@ pragma solidity 0.8.35;
  * @title IHermesNonce - Minimal nonce-manager interface pinned by every Hermes delegate.
  * @dev The one call a delegate needs from the `HermesV1` singleton; read-only helpers such as
  *      `nonceOf` live on the manager itself and are deliberately out of this interface.
+ * @custom:security-contact bugs@tonkeeper.com
  */
 interface IHermesNonce {
     /**
