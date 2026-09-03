@@ -484,10 +484,14 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///         signature under ERC-7739 defensive rehashing: the request is nested under this account's
     ///         EIP-712 domain (including the impl-pinning `salt`), preventing cross-account and
     ///         cross-domain replay while keeping the signed content readable. Accepts the two ERC-7739
-    ///         nested forms — `TypedDataSign` (EIP-712 typed data) and `PersonalSign` (an EIP-191 mimic).
+    ///         nested forms — `TypedDataSign` (EIP-712 typed data) and `PersonalSign` (an EIP-191 mimic)
+    ///         — or, as a fallback, a plain ECDSA signature over `hash` itself.
     /// @dev The account domain is `_domainSeparator()` — the same domain the opData path uses and
     ///      ERC-5267 `eip712Domain()` reports, so every signing surface stays on one domain.
     ///      Returns the ERC-7739 detection magic for the empty-signature probe.
+    ///
+    ///      The raw fallback is checked last, so an ERC-7739-aware wallet keeps the nested,
+    ///      domain-bound path unchanged.
     function isValidSignature(bytes32 hash, bytes calldata signature) external view override returns (bytes4) {
         if (_isValidTypedDataSig(hash, signature) || _isValidPersonalSig(hash, signature)) {
             return ERC1271_SUCCESS;
@@ -495,6 +499,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
 
         if (hash == ERC7739_SUPPORT_HASH && signature.length == 0) {
             return ERC7739_SUPPORT_MAGIC;
+        }
+
+        if (_validateSignature(hash, signature)) {
+            return ERC1271_SUCCESS;
         }
 
         return ERC1271_FAILURE;
@@ -531,8 +539,14 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
 
     /// @dev True iff `signature` is a valid ECDSA signature over `hash` by the delegated EOA
     ///      (address(this) under EIP-7702). Never reverts on malformed input.
+    ///
+    ///      `ECDSA.parse` accepts both the 65-byte `(r, s, v)` and the 64-byte `(r, vs)` EIP-2098
+    ///      encodings, so a compact signature validates on every signing surface. Any other length
+    ///      parses to `(0, 0, 0)`, recovery fails and this returns false — malformed input is
+    ///      fail-closed.
     function _validateSignature(bytes32 hash, bytes memory signature) private view returns (bool isValid) {
-        (address recovered, ECDSA.RecoverError err, ) = ECDSA.tryRecover(hash, signature);
+        (uint8 v, bytes32 r, bytes32 s) = ECDSA.parse(signature);
+        (address recovered, ECDSA.RecoverError err, ) = ECDSA.tryRecover(hash, v, r, s);
         isValid = (err == ECDSA.RecoverError.NoError && recovered == address(this));
     }
 
