@@ -23,6 +23,11 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *        directly, or executing any signed batch) invalidates it, mirroring how replacing a pending
  *        EOA transaction spends the account nonce. This manager imposes no expiry of its own; the
  *        delegate additionally time-bounds each signature via the signed `deadline` in that struct.
+ *      - **Spent only on success.** A delegate consumes the nonce in the same transaction as the
+ *        batch it authorizes, so a reverting batch rolls the increment back — unlike an EOA
+ *        transaction, which spends its nonce either way. A signature whose batch failed on a
+ *        transient condition stays executable once that clears; `useNonce()` retires it. Only mined,
+ *        successful batches advance the counter.
  *      - **Immutable trust anchor.** This contract has no owner, no upgrade path, no pause, and no
  *        `selfdestruct`. Once deployed it cannot be altered or replaced at its address, so delegates
  *        can safely pin it as an `immutable` dependency. Its address is therefore a security-critical

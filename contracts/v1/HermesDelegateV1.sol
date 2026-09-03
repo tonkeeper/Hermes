@@ -305,6 +305,14 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      the exact mode it was signed for and a relayer cannot extend its lifetime; `deadline == 0`
     ///      means "no expiry". The nonce is consumed before any external call, so the signature
     ///      cannot be replayed by reentering from a target.
+    ///
+    ///      Nonce consumption and the batch share one transaction, so the nonce is spent whenever the
+    ///      transaction does not revert — a batch ended early by a break policy spends it too, while a
+    ///      reverting one leaves the nonce and the signature valid. This is where the EOA analogy
+    ///      stops: a mined EOA transaction spends its nonce either way. A batch that failed on a
+    ///      transient condition therefore stays executable once that condition clears, indefinitely at
+    ///      `deadline` 0 — sign a short, non-zero `deadline`, or retire the signature with
+    ///      `manager.useNonce()`.
     function _verifySignedBatch(bytes32 mode, Call[] memory calls, bytes memory opData) private {
         (uint256 deadline, bytes memory signature) = abi.decode(opData, (uint256, bytes));
 
