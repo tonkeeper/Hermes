@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 pragma solidity 0.8.35;
 
-import "../interfaces/IHermesNonce.sol";
+import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
 
 /**
  * @title HermesV1 - Singleton nonce manager for Hermes delegates.
@@ -28,11 +28,13 @@ import "../interfaces/IHermesNonce.sol";
  *        can safely pin it as an `immutable` dependency. Its address is therefore a security-critical
  *        deploy parameter and must be verified (correct code, correct identity) before a delegate
  *        that references it is shipped.
+ *
+ * @custom:security-contact bugs@tonkeeper.com
  */
 contract HermesV1 is IHermesNonce {
 
     /// @dev Per-account monotonic nonce counter, keyed by the calling account (`msg.sender`).
-    mapping(address => uint256) private _nonces;
+    mapping(address account => uint256 nonce) private _nonces;
 
     /**
      * @notice Returns the next unused nonce for `account` — i.e. the value a signer must embed in
@@ -51,6 +53,10 @@ contract HermesV1 is IHermesNonce {
      * @dev Returns the value *before* the increment — that is the nonce bound into the caller's
      *      signature. Anyone may call this, but only ever for their own `msg.sender` slot, so it
      *      doubles as a self-service "cancel pending signature" primitive.
+     *
+     *      Also reachable from inside a delegate's batch, since under EIP-7702 the account is
+     *      `msg.sender` either way: a signed batch consumes *at least* one nonce. Read
+     *      `nonceOf(account)` instead of assuming one increment per batch.
      * @return current The caller's nonce as it was prior to this call.
      */
     function useNonce() external override returns (uint256 current) {
