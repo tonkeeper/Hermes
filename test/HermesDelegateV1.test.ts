@@ -76,8 +76,8 @@ const EXECUTE_TYPES = {
     ],
 };
 
-// A deadline far enough in the future that it never lapses mid-test (year ~2100). Signing
-// type(uint256).max would mean "no expiry"; a concrete value keeps the expiry path exercisable.
+// A deadline far enough in the future that it never lapses mid-test (year ~2100). The contract's
+// "no expiry" sentinel is 0 (tested separately); a concrete value keeps the expiry path exercisable.
 const FAR_FUTURE = 4102444800n;
 
 // ERC-7821 execution modes (bytes32, big-endian):
@@ -684,7 +684,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             const tx = await user.sendTransaction({ to: user.address, data: calldata });
             expectSuccess((await tx.wait()) as ContractTransactionReceipt);
 
-            // Calls 0 and 2 landed; the failure of call 1 was logged with its raw revert data.
+            // Calls 0 and 2 landed; the failure of call 1 was logged by index only, no revert data.
             expect(await counter.value()).to.equal(11n);
             await expect(tx)
                 .to.emit(userAsDelegate, "CallFailed").withArgs(1n);
@@ -1381,6 +1381,17 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                     .execute(mode, encodeBatchWithOpData(calls, encodeOpData(FAR_FUTURE, sig))),
             ).to.be.revertedWithCustomError(token, "ERC20InsufficientBalance");
             expect(await counter.value()).to.equal(0n);
+
+            // N-02: the revert rolled the nonce back, so the very same signed payload is still live...
+            expect(await guard.nonceOf(user.address)).to.equal(nonce);
+            // ...and executes once the transient condition clears (the user gets funded).
+            expectSuccess(await wait(token.mint(user.address, fee)));
+            const tx = await userAsDelegate
+                .connect(admin)
+                .execute(mode, encodeBatchWithOpData(calls, encodeOpData(FAR_FUTURE, sig)));
+            expectSuccess((await tx.wait()) as ContractTransactionReceipt);
+            expect(await counter.value()).to.equal(9n);
+            expect(await guard.nonceOf(user.address)).to.equal(nonce + 1n);
         });
 
         it("flat gasless batch via policies: REVERT_ON_FAIL fee + BREAK_ON_SUCCESS fallback chain", async () => {
@@ -1433,6 +1444,8 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 .to.emit(userAsDelegate, "CallFailed").withArgs(1n);
             // The relayer reads which route paid out straight off the log: index 2.
             await expect(tx).to.emit(userAsDelegate, "BatchInterrupted").withArgs(2n);
+            // N-02: an early break is not a revert — the nonce is spent.
+            expect(await guard.nonceOf(user.address)).to.equal(nonce + 1n);
         });
 
         it("binds the policies: a relayer cannot downgrade a REVERT_ON_FAIL call", async () => {
@@ -1560,7 +1573,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             ).to.be.revertedWithCustomError(userAsDelegate, "InvalidSignature");
         });
 
-        it("rejects a signature whose digest used a different impl address (re-delegation invalidates old sigs)", async () => {
+        it("rejects a signature whose digest used a different impl address (re-delegation suspends outstanding sigs)", async () => {
             const {
                 admin,
                 user,
@@ -1588,6 +1601,43 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             await expect(
                 userAsDelegate.connect(admin).execute(MODE_BATCH_OPDATA, encodeBatchWithOpData(calls, encodeOpData(FAR_FUTURE, sig))),
             ).to.be.revertedWithCustomError(userAsDelegate, "InvalidSignature");
+        });
+
+        it("re-delegation suspends a pending signature: rejected under other code, valid again once delegated back", async () => {
+            const { admin, user, userAsDelegate, guard, guardAddr, counter, counterAddr, chainId, implAddr } =
+                await setup();
+            const other = await deployContract<HermesDelegateV1>("HermesDelegateV1", [guardAddr], admin);
+            const otherImpl = (await other.getAddress()) as Address;
+
+            const calls: Call[] = [bumpCall(counter, 4n, counterAddr)];
+            const nonce = await guard.nonceOf(user.address);
+            const sig = signRaw(
+                user,
+                computeExecDigest({
+                    mode: MODE_BATCH_OPDATA,
+                    calls,
+                    nonce,
+                    deadline: FAR_FUTURE,
+                    chainId,
+                    eoa: user.address as Address,
+                    implAddr,
+                }),
+            );
+            const data = encodeBatchWithOpData(calls, encodeOpData(FAR_FUTURE, sig));
+
+            // Delegated to other code: the salt no longer matches, so the signature is suspended...
+            await delegateEoaToContract(user, otherImpl, admin);
+            await expect(userAsDelegate.connect(admin).execute(MODE_BATCH_OPDATA, data))
+                .to.be.revertedWithCustomError(userAsDelegate, "InvalidSignature");
+            // ...and the manager nonce survived the re-delegation.
+            expect(await guard.nonceOf(user.address)).to.equal(nonce);
+
+            // Delegated back to the same implementation: the very same payload validates again.
+            await delegateEoaToContract(user, implAddr, admin);
+            const tx = await userAsDelegate.connect(admin).execute(MODE_BATCH_OPDATA, data);
+            expectSuccess((await tx.wait()) as ContractTransactionReceipt);
+            expect(await counter.value()).to.equal(4n);
+            expect(await guard.nonceOf(user.address)).to.equal(nonce + 1n);
         });
 
         it("bubbles inner revert from a failing call", async () => {
@@ -1962,11 +2012,11 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
         });
 
         // SECURITY REGRESSION GUARD: the contract's only defense against replay-through-reentry is
-        // the ORDER of operations in _verifySignedBatch — the nonce is consumed before any external
-        // call. A target reached mid-batch re-submits the exact same signed payload; the re-derived
-        // digest uses the already-advanced nonce, so the replay must die with InvalidSignature and
-        // the batch must execute exactly once. If the nonce consumption is ever moved after
-        // _executeBatch, this test fails with a doubled counter.
+        // the ORDER of operations in _verifySignedBatch — the nonce is consumed before any of the
+        // batch's calls. A target reached mid-batch re-submits the exact same signed payload; the
+        // re-derived digest uses the already-advanced nonce, so the replay must die with
+        // InvalidSignature and the batch must execute exactly once. If the nonce consumption is ever
+        // moved after _executeBatch, this test fails with a doubled counter.
         it("reentrancy: a target cannot replay the same signed batch mid-execution (nonce burned first)", async () => {
             const { admin, user, userAsDelegate, guard, counter, counterAddr, chainId, implAddr } =
                 await setup();
@@ -2179,7 +2229,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await userAsDelegate.isValidSignature(hash, signature)).to.equal(ERC1271_FAILURE);
         });
 
-        it("TypedDataSign: rejects when the embedded salt is a different impl (re-delegation invalidates)", async () => {
+        it("TypedDataSign: rejects when the embedded salt is a different impl (re-delegation suspends)", async () => {
             const { user, userAsDelegate, chainId } = await setup();
             const otherImpl = Wallet.createRandom().address as Address;
             const { hash, signature } = buildTypedDataSig({
@@ -2237,7 +2287,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 "0x" + "cd".repeat(80) + "ffff",
                 // structurally valid 7739 envelope (descr len 16 fits) but every segment is noise
                 concat([signRaw(user, msg), keccak256("0x01"), keccak256("0x02"), "0x" + "ee".repeat(16), "0x0010"]),
-                "0x" + "00".repeat(200), // all zeros: descr len 0, personal-sign fallback gets 200B sig
+                "0x" + "00".repeat(200), // all zeros: descr len 0; the PersonalSign and raw-ECDSA paths each get a 200B sig, which ECDSA.parse rejects
             ];
             for (const blob of blobs) {
                 expect(await userAsDelegate.isValidSignature(msg, blob)).to.equal(ERC1271_FAILURE);

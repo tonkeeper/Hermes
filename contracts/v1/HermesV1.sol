@@ -6,8 +6,8 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
 /**
  * @title HermesV1 - Singleton nonce manager for Hermes delegates.
  * @author anchupin
- * @notice Sole source of replay protection for the signature-based execution path
- *         (`HermesDelegateV1.executeWithSignature`). Deployed once and shared by every
+ * @notice Sole source of replay protection for the signature-based execution path — the `opData`
+ *         mode of `HermesDelegateV1.execute`. Deployed once and shared by every
  *         Hermes-delegated account; each account's nonce is isolated by `msg.sender`.
  *
  * @dev Design and trust model:
@@ -18,16 +18,17 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *        The returned (pre-increment) value is the nonce a delegate folds into the EIP-712
  *        `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)` struct hash, binding each
  *        signature to exactly one slot in the sequence.
- *      - **Signature lifecycle (EOA-like).** A pending `executeWithSignature` signature stays valid
+ *      - **Signature lifecycle (EOA-like).** A pending signed-batch signature stays valid
  *        until its nonce is consumed; advancing the nonce (e.g. the EOA calling `useNonce()`
  *        directly, or executing any signed batch) invalidates it, mirroring how replacing a pending
  *        EOA transaction spends the account nonce. This manager imposes no expiry of its own; the
  *        delegate additionally time-bounds each signature via the signed `deadline` in that struct.
- *      - **Spent only on success.** A delegate consumes the nonce in the same transaction as the
- *        batch it authorizes, so a reverting batch rolls the increment back — unlike an EOA
- *        transaction, which spends its nonce either way. A signature whose batch failed on a
- *        transient condition stays executable once that clears; `useNonce()` retires it. Only mined,
- *        successful batches advance the counter.
+ *      - **Spent unless the transaction reverts.** A delegate consumes the nonce in the same
+ *        transaction as the batch it authorizes, so the nonce is spent whenever that transaction
+ *        does not revert — a batch ended early by a break policy spends it too — while a reverting
+ *        batch rolls the increment back, unlike an EOA transaction, which spends its nonce either
+ *        way. A signature whose batch failed on a transient condition stays executable once that
+ *        clears; `useNonce()` retires it. Only transactions that did not revert advance the counter.
  *      - **Immutable trust anchor.** This contract has no owner, no upgrade path, no pause, and no
  *        `selfdestruct`. Once deployed it cannot be altered or replaced at its address, so delegates
  *        can safely pin it as an `immutable` dependency. Its address is therefore a security-critical
