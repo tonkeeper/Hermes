@@ -682,8 +682,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             // Calls 0 and 2 landed; the failure of call 1 was logged with its raw revert data.
             expect(await counter.value()).to.equal(11n);
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(1n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(1n);
         });
 
         it("try mode + REVERT_ON_FAIL policy: a reached call's failure reverts the whole batch", async () => {
@@ -721,10 +720,32 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
 
             expect(await counter.value()).to.equal(11n);
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(1n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(1n);
             // An OPTIONAL failure is not a termination: the batch ran to completion.
             await expect(tx).to.not.emit(userAsDelegate, "BatchInterrupted");
+        });
+
+        it("try mode survives a return-bombing call: only the index is logged, the batch continues", async () => {
+            const { admin, user, userAsDelegate, counter, counterAddr } = await setup();
+            const bomber = await deployContract<Counter>("ReturnBomber" as never, [], admin);
+            const bomberAddr = (await bomber.getAddress()) as Address;
+            const bombData = new ethers.Interface(["function boom(uint256)"]).encodeFunctionData("boom", [500_000n]);
+
+            const calls: Call[] = [
+                bumpCall(counter, 1n, counterAddr),
+                { target: bomberAddr, value: 0n, data: bombData }, // OPTIONAL (00): log and continue
+                bumpCall(counter, 10n, counterAddr),
+            ];
+            const calldata = userAsDelegate.interface.encodeFunctionData("execute", [
+                MODE_BATCH_TRY,
+                encodeBatch(calls),
+            ]);
+            const tx = await user.sendTransaction({ to: user.address, data: calldata, gasLimit: 1_000_000 });
+            expectSuccess((await tx.wait()) as ContractTransactionReceipt);
+
+            // Both honest calls ran: the bomb did not become fatal.
+            expect(await counter.value()).to.equal(11n);
+            await expect(tx).to.emit(userAsDelegate, "CallFailed").withArgs(1n);
         });
 
         it("try mode + BREAK_ON_FAIL policy: a failure logs, skips the rest and the tx succeeds", async () => {
@@ -745,8 +766,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
 
             expect(await counter.value()).to.equal(1n);
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(1n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(1n);
             await expect(tx).to.emit(userAsDelegate, "BatchInterrupted").withArgs(1n);
         });
 
@@ -766,7 +786,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expectSuccess((await tx.wait()) as ContractTransactionReceipt);
 
             expect(await counter.value()).to.equal(11n);
-            await expect(tx).to.not.emit(userAsDelegate, "ERC7579TryExecuteFail");
+            await expect(tx).to.not.emit(userAsDelegate, "CallFailed");
             await expect(tx).to.not.emit(userAsDelegate, "BatchInterrupted");
         });
 
@@ -817,7 +837,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expectSuccess((await tx.wait()) as ContractTransactionReceipt);
 
             expect(await counter.value()).to.equal(1n);
-            await expect(tx).to.not.emit(userAsDelegate, "ERC7579TryExecuteFail");
+            await expect(tx).to.not.emit(userAsDelegate, "CallFailed");
             // Nothing failed, so `BatchInterrupted` is the account's only log — and the sole
             // evidence that call 1 was skipped rather than executed.
             await expect(tx).to.emit(userAsDelegate, "BatchInterrupted").withArgs(0n);
@@ -842,10 +862,9 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
 
             expect(await counter.value()).to.equal(5n);
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(0n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(0n);
             // The fallback that landed is index 1 — named directly, not inferred from the absence
-            // of an `ERC7579TryExecuteFail(1, …)`.
+            // of a `CallFailed(1)`.
             await expect(tx).to.emit(userAsDelegate, "BatchInterrupted").withArgs(1n);
         });
 
@@ -864,8 +883,8 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             const receipt = (await tx.wait()) as ContractTransactionReceipt;
             expectSuccess(receipt);
 
-            // A BREAK_ON_FAIL stop is exactly two logs from the account: the failure carrying the
-            // raw revert data, then the termination marker — both for call 1. (The `Bumped` log of
+            // A BREAK_ON_FAIL stop is exactly two logs from the account: the failure, then the
+            // termination marker — both for call 1. (The `Bumped` log of
             // call 0 comes from the Counter, so filtering by the account's address drops it.)
             const accountLogs = receipt.logs
                 .filter((log) => log.address.toLowerCase() === user.address.toLowerCase())
@@ -874,7 +893,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
                 );
 
             expect(accountLogs.map((parsed) => parsed?.name)).to.deep.equal([
-                "ERC7579TryExecuteFail",
+                "CallFailed",
                 "BatchInterrupted",
             ]);
             expect(accountLogs[0]?.args[0]).to.equal(1n);
@@ -1116,8 +1135,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await counter.value()).to.equal(3n);
             expect(await guard.nonceOf(user.address)).to.equal(nonce + 1n);
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(0n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(0n);
         });
 
         it("binds the exec type: a signature for the atomic mode is rejected under try mode", async () => {
@@ -1205,8 +1223,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect((await token.balanceOf(relayer)) - relayerBalanceBefore).to.equal(fee);
             expect(await counter.value()).to.equal(9n);
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(0n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(0n);
         });
 
         it("gasless relay vs out-of-gas griefing: an all-gas-burning user call cannot roll back the fee", async () => {
@@ -1273,9 +1290,9 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expectSuccess(receipt);
 
             // The tx succeeded on the 1/64 reserves, the fee stands, and the OOG shows up as a
-            // ERC7579TryExecuteFail with EMPTY revert data (OOG returns no data).
+            // CallFailed for call 0.
             expect((await token.balanceOf(relayer)) - relayerBalanceBefore).to.equal(fee);
-            await expect(tx).to.emit(userAsDelegate, "ERC7579TryExecuteFail").withArgs(0n, "0x");
+            await expect(tx).to.emit(userAsDelegate, "CallFailed").withArgs(0n);
             // The grief is still expensive for the relayer: nearly the whole gasLimit was consumed.
             expect(receipt.gasUsed).to.be.greaterThan(900_000n);
         });
@@ -1320,8 +1337,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect((await token.balanceOf(relayer)) - relayerBalanceBefore).to.equal(fee);
             expect(await counter.value()).to.equal(9n);
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(1n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(1n);
         });
 
         it("flat gasless batch via policies: a failing REVERT_ON_FAIL fee reverts everything — drain front-run gives nothing", async () => {
@@ -1409,8 +1425,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect((await token.balanceOf(relayer)) - relayerBalanceBefore).to.equal(fee);
             expect(await counter.value()).to.equal(9n); // fallback landed, trailing bump skipped
             await expect(tx)
-                .to.emit(userAsDelegate, "ERC7579TryExecuteFail")
-                .withArgs(1n, counter.interface.encodeErrorResult("CounterBoom"));
+                .to.emit(userAsDelegate, "CallFailed").withArgs(1n);
             // The relayer reads which route paid out straight off the log: index 2.
             await expect(tx).to.emit(userAsDelegate, "BatchInterrupted").withArgs(2n);
         });
