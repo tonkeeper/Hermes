@@ -28,6 +28,8 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *        can safely pin it as an `immutable` dependency. Its address is therefore a security-critical
  *        deploy parameter and must be verified (correct code, correct identity) before a delegate
  *        that references it is shipped.
+ *
+ * @custom:security-contact bugs@tonkeeper.com
  */
 contract HermesV1 is IHermesNonce {
 
