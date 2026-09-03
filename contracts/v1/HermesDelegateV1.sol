@@ -54,7 +54,9 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *      digest — a submitter can neither replay a signature under another exec type nor downgrade
  *      any call's policy.
  *
- *      Per ERC-7821, a `Call.target` of `address(0)` is executed against `address(this)`.
+ *      Per ERC-7821, a `Call.target` of `address(0)` is executed against `address(this)`, and
+ *      `_hashCalls` canonicalizes it the same way — the signer always signs the address the call
+ *      runs against, and `address(0)` is only a calldata-size shorthand for a self-call.
  *
  *      State surface: immutable `delegateAddress` (implementation pin for EIP-712 salt) and
  *      immutable `manager` (singleton nonce source). No mutable storage.
@@ -384,7 +386,9 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///      BREAK_ON_SUCCESS success ends the batch early. Both early terminations emit
     ///      `BatchInterrupted(i)` at the single break site. Try batches are capped at
     ///      `MAX_TRY_CALLS` so every call has a policy slot; the default exec type has no cap.
-    ///      Per ERC-7821, a `Call.target` of `address(0)` is executed against this account.
+    ///      Per ERC-7821, a `Call.target` of `address(0)` is executed against this account; on the
+    ///      signed path `_hashCalls` canonicalizes it identically, so the signed and the executed
+    ///      target are always the same address.
     function _executeBatch(Call[] memory calls, bool tryExec, uint256 policies) private {
         uint256 length = calls.length;
         if (tryExec && length > MAX_TRY_CALLS) {
@@ -428,11 +432,16 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     }
 
     /// @dev EIP-712 encoding of `Call[]`: keccak256 of the concatenated hashStructs of the elements.
-    function _hashCalls(Call[] memory calls) private pure returns (bytes32) {
+    ///      A `target` of `address(0)` is canonicalized to `address(this)` before hashing, exactly as
+    ///      `_executeBatch` rewrites it before calling, so a self-call has one signable form — its
+    ///      real address — and the zero form is a calldata-size shorthand a submitter may substitute
+    ///      without changing the digest.
+    function _hashCalls(Call[] memory calls) private view returns (bytes32) {
         uint256 length = calls.length;
         bytes32[] memory callHashes = new bytes32[](length);
         for (uint256 i; i < length; ++i) {
-            callHashes[i] = keccak256(abi.encode(CALL_TYPEHASH, calls[i].target, calls[i].value, keccak256(calls[i].data)));
+            address target = calls[i].target == address(0) ? address(this) : calls[i].target;
+            callHashes[i] = keccak256(abi.encode(CALL_TYPEHASH, target, calls[i].value, keccak256(calls[i].data)));
         }
         return keccak256(abi.encodePacked(callHashes));
     }
