@@ -441,6 +441,46 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await delegate.supportsExecutionMode(MODE_EXEC_TYPE_2)).to.equal(false);
         });
 
+        it("decodeCallPolicies() round-trips the packed try-mode policies", async () => {
+            const { delegate } = await setup();
+            const packed =
+                policyAt(0, POLICY_BREAK_ON_SUCCESS) |
+                policyAt(2, POLICY_REQUIRED) |
+                policyAt(3, POLICY_BREAK_ON_FAIL);
+
+            for (const withOpData of [false, true]) {
+                const policies = await delegate.decodeCallPolicies(modeTryWithPolicies(packed, withOpData), 4);
+                expect(policies.map(Number)).to.deep.equal([3, 0, 1, 2]);
+            }
+        });
+
+        // A batch longer than the policies its mode specifies is well-formed on-chain — the missing
+        // slots read as OPTIONAL, so a call meant to be REQUIRED silently is not. Round-tripping
+        // the encoding through this view before requesting a signature is what surfaces that.
+        it("decodeCallPolicies() reads unset slots as OPTIONAL", async () => {
+            const { delegate } = await setup();
+            const policies = await delegate.decodeCallPolicies(
+                modeTryWithPolicies(policyAt(0, POLICY_REQUIRED), false),
+                3,
+            );
+            expect(policies.map(Number)).to.deep.equal([1, 0, 0]);
+        });
+
+        // The decoder is not a second validator: what `execute` would reject comes back as an empty
+        // array, so decoding never has to be wrapped in a try/catch.
+        it("decodeCallPolicies() returns an empty array for what execute would reject", async () => {
+            const { delegate } = await setup();
+
+            for (const mode of [MODE_SINGLE, MODE_BATCH_OF_BATCHES, MODE_DELEGATECALL, MODE_EXEC_TYPE_2]) {
+                expect((await delegate.decodeCallPolicies(mode, 1)).length).to.equal(0);
+            }
+
+            // Try mode is capped at the payload's 88 policy slots; the default exec type has no cap.
+            expect((await delegate.decodeCallPolicies(MODE_BATCH_TRY, 88)).length).to.equal(88);
+            expect((await delegate.decodeCallPolicies(MODE_BATCH_TRY, 89)).length).to.equal(0);
+            expect((await delegate.decodeCallPolicies(MODE_BATCH, 89)).length).to.equal(89);
+        });
+
         it("eip712Domain() (ERC-5267) returns the domain the signed paths use", async () => {
             const { userAsDelegate, user, implAddr, chainId, counter, counterAddr } = await setup();
             const d = await userAsDelegate.eip712Domain();

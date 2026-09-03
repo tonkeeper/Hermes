@@ -46,7 +46,9 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *                               transaction succeeds); a failure emits `ERC7579TryExecuteFail` and
  *                               the batch continues — "try fallbacks until one lands".
  *      Either early termination emits `BatchInterrupted(i)`, so a log consumer sees that the
- *      batch stopped short, and where, without decoding the policy bits out of `mode`.
+ *      batch stopped short, and where, without decoding the policy bits out of `mode`. The packed
+ *      policies are readable back through the pure `decodeCallPolicies` view, so an integration can
+ *      round-trip its encoder against the contract instead of reimplementing the bit layout.
  *      Try batches are capped at 88 calls (176 payload bits / 2) so every call's policy is always
  *      expressible. The exec type and policies are part of `mode` and thus bound into the signed
  *      digest — a submitter can neither replay a signature under another exec type nor downgrade
@@ -305,6 +307,37 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     function supportsExecutionMode(bytes32 mode) external pure override returns (bool) {
         (ModeId id, , ) = _decodeExecutionMode(mode);
         return id != ModeId.Unsupported;
+    }
+
+    /// @notice Unpacks the per-call try-mode policies packed into `mode`'s payload, so an integrator
+    ///         can round-trip its own encoder against the contract before asking a user to sign.
+    /// @dev Mirrors what `_executeBatch` reads: call `i`'s 2-bit policy sits at bits [2i+1:2i] of the
+    ///      mode payload, least-significant-bit first. Reports rejection with an empty array instead
+    ///      of reverting, so decoding a mode never has to be wrapped in a try/catch. The payload is only
+    ///      consulted under the try exec type; under the default one the first failing call reverts
+    ///      the batch whatever these bits say.
+    /// @param mode ERC-7821 execution mode whose payload to unpack.
+    /// @param callCount Number of calls in the batch this `mode` is meant to execute.
+    /// @return policies Policy governing each call: `policies[i]` is 0 OPTIONAL, 1 REQUIRED,
+    ///         2 BREAK_ON_FAIL or 3 BREAK_ON_SUCCESS. Slots the encoder never set read as OPTIONAL,
+    ///         which is why an under-specified encoding is well-formed on-chain and shows up only by
+    ///         comparing this output against the intended policies. Empty when `execute` would reject
+    ///         the pair — an unsupported `mode`, or a try batch above `MAX_TRY_CALLS`.
+    function decodeCallPolicies(bytes32 mode, uint256 callCount)
+        external
+        pure
+        returns (uint8[] memory policies)
+    {
+        (ModeId id, bool tryExec, uint176 payload) = _decodeExecutionMode(mode);
+        bool accepted = id != ModeId.Unsupported && (!tryExec || callCount <= MAX_TRY_CALLS);
+
+        if (accepted) {
+            policies = new uint8[](callCount);
+
+            for (uint256 i; i < callCount; ++i) {
+                policies[i] = uint8((uint256(payload) >> (2 * i)) & 3);
+            }
+        }
     }
 
     /// @dev Decodes an ERC-7821 `mode` via `ERC7579Utils.decodeMode` and classifies it against the
