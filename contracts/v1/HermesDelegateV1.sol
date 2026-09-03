@@ -38,8 +38,7 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *      per call, call `i` at bits [2i+1:2i] counting from the least significant bit:
  *      - `00` OPTIONAL:         a failure emits `CallFailed` and the batch continues;
  *                               a zero payload is thus the uniform try batch (standard try semantics).
- *      - `01` REQUIRED:         a failure reverts the whole batch, as in the default exec type
- *                               (e.g. a relayer-fee transfer that must never be skipped).
+ *      - `01` REVERT_ON_FAIL:   a failure reverts the whole batch, as in the default exec type.
  *      - `10` BREAK_ON_FAIL:    a failure emits `CallFailed` and ends the batch early —
  *                               the remaining calls are skipped, the transaction still succeeds.
  *      - `11` BREAK_ON_SUCCESS: a success ends the batch early (remaining calls are skipped, the
@@ -47,16 +46,27 @@ import {IHermesNonce} from "../interfaces/IHermesNonce.sol";
  *                               the batch continues — "try fallbacks until one lands".
  *      A non-fatal failure emits `CallFailed(i)`; either early termination additionally emits
  *      `BatchInterrupted(i)`. A log consumer therefore sees which call failed and where the batch
- *      stopped, without decoding the policy bits out of `mode`.
+ *      stopped, without decoding the policy bits out of `mode`. The packed policies are readable
+ *      back through the pure `decodeCallPolicies` view, so an integration can round-trip its
+ *      encoder against the contract instead of reimplementing the bit layout.
+ *
+ *      A policy governs what a call's outcome does to the rest of the batch, not whether that call
+ *      is reached: a break triggered earlier skips everything after it, REVERT_ON_FAIL included,
+ *      while the transaction still succeeds. A relayer that wants its fee to be unconditional puts
+ *      it at index 0, or rejects batches where a break-capable call precedes it.
  *      Try batches are capped at 88 calls (176 payload bits / 2) so every call's policy is always
  *      expressible. The exec type and policies are part of `mode` and thus bound into the signed
  *      digest — a submitter can neither replay a signature under another exec type nor downgrade
  *      any call's policy.
  *
- *      Per ERC-7821, a `Call.target` of `address(0)` is executed against `address(this)`.
+ *      Per ERC-7821, a `Call.target` of `address(0)` is executed against `address(this)`, and
+ *      `_hashCalls` canonicalizes it the same way — the signer always signs the address the call
+ *      runs against, and `address(0)` is only a calldata-size shorthand for a self-call.
  *
  *      State surface: immutable `delegateAddress` (implementation pin for EIP-712 salt) and
  *      immutable `manager` (singleton nonce source). No mutable storage.
+ *
+ * @custom:security-contact bugs@tonkeeper.com
  */
 contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 {
 
@@ -68,7 +78,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     }
 
     /// @notice A try-mode call failed non-fatally: call `index` failed and its policy is not
-    ///         REQUIRED, so the batch continued (OPTIONAL, BREAK_ON_SUCCESS) or stopped after it
+    ///         REVERT_ON_FAIL, so the batch continued (OPTIONAL, BREAK_ON_SUCCESS) or stopped after it
     ///         (BREAK_ON_FAIL).
     /// @param index Index of the call that failed.
     event CallFailed(uint256 index);
@@ -140,15 +150,21 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         BatchOpData
     }
 
-    /// @dev Maximum batch size in try mode — the mode payload (`bytes22`, 176 bits) carries one
-    ///      2-bit policy per call, so 88 slots keep every call's policy always expressible.
-    uint256 private constant MAX_TRY_CALLS = 88;
+    /// @dev Bit width of the ERC-7821 mode payload (`bytes22`, mode bytes [10:32]).
+    uint256 private constant MODE_PAYLOAD_BITS = 176;
+    /// @dev Maximum batch size in try mode — the mode payload carries one `POLICY_BITS`-wide
+    ///      policy per call, so 88 slots keep every call's policy always expressible.
+    uint256 private constant MAX_TRY_CALLS = MODE_PAYLOAD_BITS / POLICY_BITS;
 
     // ─── Per-call try-mode policies (2 bits each; call `i` at bits [2i+1:2i] of the payload) ───
+    /// @dev Bit width of one per-call policy slot inside the packed policies word.
+    uint256 private constant POLICY_BITS = 2;
+    /// @dev Mask selecting a single `POLICY_BITS`-wide policy slot (`0b11`).
+    uint256 private constant POLICY_MASK = 3;
     /// @dev `00`: a failure is logged via `CallFailed` and the batch continues.
     uint256 private constant POLICY_OPTIONAL = 0x0;
     /// @dev `01`: a failure reverts the whole batch, as in the default exec type.
-    uint256 private constant POLICY_REQUIRED = 0x1;
+    uint256 private constant POLICY_REVERT_ON_FAIL = 0x1;
     /// @dev `10`: a failure is logged and ends the batch early; the transaction still succeeds.
     uint256 private constant POLICY_BREAK_ON_FAIL = 0x2;
     /// @dev `11`: a success ends the batch early; a failure is logged and the batch continues.
@@ -242,14 +258,16 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     ///                          over `Execute(bytes32 mode,Call[] calls,uint256 nonce,uint256 deadline)`,
     ///                          replay-protected by the Hermes nonce and rejected once `block.timestamp`
     ///                          passes `deadline`. The nonce is consumed before any external call, so the
-    ///                          signature cannot be replayed by reentering from a target.
+    ///                          signature cannot be replayed by reentering from a target. A signed
+    ///                          batch consumes *at least* one nonce: the manager keys nonces by
+    ///                          `msg.sender`, which under EIP-7702 is the account here and for a call
+    ///                          inside the batch alike, so a batch that itself calls `useNonce`
+    ///                          advances the counter again. Read `nonceOf(account)` rather than
+    ///                          tracking it incrementally.
     ///         Both modes accept exec type `0x00` (atomic: revert and bubble up on the first failing
     ///         call) and `0x01` ("try": each call's outcome is governed by its 2-bit policy in the
-    ///         mode payload [10:32] — OPTIONAL `00` log-and-continue, REQUIRED `01` revert the whole
-    ///         batch, BREAK_ON_FAIL `10` log and end the batch early, BREAK_ON_SUCCESS `11` end the
-    ///         batch early once the call succeeds, log-and-continue while it fails; either early
-    ///         termination emits `BatchInterrupted`). The exec type and policies are part of `mode`
-    ///         and therefore bound into the signed digest.
+    ///         mode payload, described in the contract docstring). The exec type and the policies are
+    ///         part of `mode` and therefore bound into the signed digest.
     /// @param mode ERC-7821 execution mode; only the two single-batch modes are supported.
     /// @param executionData `abi.encode(Call[] calls)` for the no-`opData` mode, or
     ///        `abi.encode(Call[] calls, bytes opData)` for the `opData` mode, where `opData` is itself
@@ -305,13 +323,45 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         return id != ModeId.Unsupported;
     }
 
+    /// @notice Unpacks the per-call try-mode policies packed into `mode`'s payload, so an integrator
+    ///         can round-trip its own encoder against the contract before asking a user to sign.
+    /// @dev Mirrors what `_executeBatch` reads: call `i`'s 2-bit policy sits at bits [2i+1:2i] of the
+    ///      mode payload, least-significant-bit first. Reports rejection with an empty array instead
+    ///      of reverting, so decoding a mode never has to be wrapped in a try/catch. The payload is only
+    ///      consulted under the try exec type; under the default one the first failing call reverts
+    ///      the batch whatever these bits say.
+    /// @param mode ERC-7821 execution mode whose payload to unpack.
+    /// @param callCount Number of calls in the batch this `mode` is meant to execute.
+    /// @return policies Policy governing each call: `policies[i]` is 0 OPTIONAL, 1 REVERT_ON_FAIL,
+    ///         2 BREAK_ON_FAIL or 3 BREAK_ON_SUCCESS. Slots the encoder never set read as OPTIONAL,
+    ///         which is why an under-specified encoding is well-formed on-chain and shows up only by
+    ///         comparing this output against the intended policies. Empty when `execute` would reject
+    ///         the pair — an unsupported `mode`, or a try batch above `MAX_TRY_CALLS`.
+    function decodeCallPolicies(bytes32 mode, uint256 callCount)
+        external
+        pure
+        returns (uint8[] memory policies)
+    {
+        (ModeId id, bool tryExec, uint176 payload) = _decodeExecutionMode(mode);
+        bool accepted = id != ModeId.Unsupported && (!tryExec || callCount <= MAX_TRY_CALLS);
+
+        if (accepted) {
+            policies = new uint8[](callCount);
+
+            for (uint256 i; i < callCount; ++i) {
+                policies[i] = uint8((uint256(payload) >> (2 * i)) & 3);
+            }
+        }
+    }
+
     /// @dev Decodes an ERC-7821 `mode` via `ERC7579Utils.decodeMode` and classifies it against the
     ///      supported single-batch modes. The payload is ignored for classification and returned
     ///      raw — in try mode it carries the packed per-call policies (see `execute`).
-    /// @return id `Batch` (no opData), `BatchOpData` (with opData), or `Unsupported` (fails closed).
-    /// @return tryExec True for exec type `0x01` (continue past failing calls), false for `0x00`.
-    /// @return payload The mode payload (bytes [10:32]) as an integer.
-    function _decodeExecutionMode(bytes32 mode) private pure returns (ModeId id, bool tryExec, uint176 payload) {
+    /// @return The mode's classification: `Batch` (no opData), `BatchOpData` (with opData), or
+    ///         `Unsupported` (fails closed).
+    /// @return True for exec type `0x01` (continue past failing calls), false for `0x00`.
+    /// @return The mode payload (bytes [10:32]) as an integer.
+    function _decodeExecutionMode(bytes32 mode) private pure returns (ModeId, bool, uint176) {
         (CallType callType, ExecType execType, ModeSelector modeSelector, ModePayload modePayload) =
             ERC7579Utils.decodeMode(Mode.wrap(mode));
 
@@ -320,13 +370,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
         }
 
         bool defaultExec = execType == ERC7579Utils.EXECTYPE_DEFAULT;
-        tryExec = execType == ERC7579Utils.EXECTYPE_TRY;
+        bool tryExec = execType == ERC7579Utils.EXECTYPE_TRY;
 
         if (!defaultExec && !tryExec) {
             return (ModeId.Unsupported, false, 0);
         }
 
-        payload = uint176(ModePayload.unwrap(modePayload));
+        uint176 payload = uint176(ModePayload.unwrap(modePayload));
 
         if (modeSelector == MODE_SELECTOR_NO_OPDATA) {
             return (ModeId.Batch, tryExec, payload);
@@ -342,13 +392,14 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     /// @dev Executes each call in order. With `tryExec` false — the classic atomic batch — the
     ///      first failure reverts and bubbles up the callee's raw revert data; `policies` is never
     ///      consulted. With `tryExec` true, call `i`'s 2-bit policy (bits [2i+1:2i] of `policies`)
-    ///      decides what its outcome does: a REQUIRED failure reverts the whole batch; an OPTIONAL
-    ///      or BREAK_ON_SUCCESS failure is logged via `CallFailed` and the batch
-    ///      continues; a BREAK_ON_FAIL failure is logged and ends the batch early; a
-    ///      BREAK_ON_SUCCESS success ends the batch early. Both early terminations emit
-    ///      `BatchInterrupted(i)` at the single break site. Try batches are capped at
-    ///      `MAX_TRY_CALLS` so every call has a policy slot; the default exec type has no cap.
-    ///      Per ERC-7821, a `Call.target` of `address(0)` is executed against this account.
+    ///      decides what its outcome does — the four policies are described in the contract
+    ///      docstring. Both early terminations emit `BatchInterrupted(i)` at the single break site.
+    ///      A policy is only consulted for a call that is reached: a break earlier in the batch skips
+    ///      every later call, whatever its policy. Try batches are capped at `MAX_TRY_CALLS` so every
+    ///      call has a policy slot; the default exec type has no cap.
+    ///      Per ERC-7821, a `Call.target` of `address(0)` is executed against this account; on the
+    ///      signed path `_hashCalls` canonicalizes it identically, so the signed and the executed
+    ///      target are always the same address.
     ///
     ///      A non-fatal failure is recorded as `CallFailed(i)`: the log says that call `i` failed and
     ///      which one it was, and the reason is investigated off-chain from the transaction itself.
@@ -371,10 +422,10 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
                 continue;
             }
 
-            uint256 policy = (policies >> (2 * i)) & 3;
+            uint256 policy = (policies >> (POLICY_BITS * i)) & POLICY_MASK;
 
             if (!success) {
-                if (policy == POLICY_REQUIRED) {
+                if (policy == POLICY_REVERT_ON_FAIL) {
                     _bubbleRevert();
                 }
 
@@ -408,11 +459,16 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
     }
 
     /// @dev EIP-712 encoding of `Call[]`: keccak256 of the concatenated hashStructs of the elements.
-    function _hashCalls(Call[] memory calls) private pure returns (bytes32) {
+    ///      A `target` of `address(0)` is canonicalized to `address(this)` before hashing, exactly as
+    ///      `_executeBatch` rewrites it before calling, so a self-call has one signable form — its
+    ///      real address — and the zero form is a calldata-size shorthand a submitter may substitute
+    ///      without changing the digest.
+    function _hashCalls(Call[] memory calls) private view returns (bytes32) {
         uint256 length = calls.length;
         bytes32[] memory callHashes = new bytes32[](length);
         for (uint256 i; i < length; ++i) {
-            callHashes[i] = keccak256(abi.encode(CALL_TYPEHASH, calls[i].target, calls[i].value, keccak256(calls[i].data)));
+            address target = calls[i].target == address(0) ? address(this) : calls[i].target;
+            callHashes[i] = keccak256(abi.encode(CALL_TYPEHASH, target, calls[i].value, keccak256(calls[i].data)));
         }
         return keccak256(abi.encodePacked(callHashes));
     }
@@ -510,7 +566,13 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
             uint256[] memory extensions
         )
     {
-        return (hex"1f", "Hermes", "v1.0.0", block.chainid, address(this), delegateAddress, new uint256[](0));
+        fields = hex"1f";
+        name = "Hermes";
+        version = "v1.0.0";
+        chainId = block.chainid;
+        verifyingContract = address(this);
+        salt = delegateAddress;
+        extensions = new uint256[](0);
     }
 
     // ─────────────────────────────────────────────────────────────────────────
