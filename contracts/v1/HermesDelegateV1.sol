@@ -361,7 +361,7 @@ contract HermesDelegateV1 is HermesBase, IAccount, IERC1271, IERC7821, IERC5267 
             policies = new uint8[](callCount);
 
             for (uint256 i; i < callCount; ++i) {
-                policies[i] = uint8((uint256(payload) >> (2 * i)) & 3);
+                policies[i] = uint8((uint256(payload) >> (POLICY_BITS * i)) & POLICY_MASK);
             }
         }
     }

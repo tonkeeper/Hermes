@@ -1560,7 +1560,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             ).to.be.revertedWithCustomError(userAsDelegate, "InvalidSignature");
         });
 
-        it("rejects a signature whose digest used a different impl address (re-delegation invalidates old sigs)", async () => {
+        it("rejects a signature whose digest used a different impl address (re-delegation suspends outstanding sigs)", async () => {
             const {
                 admin,
                 user,
@@ -2179,7 +2179,7 @@ describe("HermesDelegateV1 (EIP-7702 + ERC-4337 + ERC-1271)", () => {
             expect(await userAsDelegate.isValidSignature(hash, signature)).to.equal(ERC1271_FAILURE);
         });
 
-        it("TypedDataSign: rejects when the embedded salt is a different impl (re-delegation invalidates)", async () => {
+        it("TypedDataSign: rejects when the embedded salt is a different impl (re-delegation suspends)", async () => {
             const { user, userAsDelegate, chainId } = await setup();
             const otherImpl = Wallet.createRandom().address as Address;
             const { hash, signature } = buildTypedDataSig({
