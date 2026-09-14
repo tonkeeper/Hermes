@@ -5,9 +5,15 @@ import "hardhat-abi-exporter";
 
 dotenv.config();
 
-// Single deployer key, used for every remote network. Leave unset to compile/test.
+// Single deployer, used for every remote network: a raw private key, or a BIP-39 mnemonic
+// (first account, m/44'/60'/0'/0/0). Leave both unset to compile/test.
 const DEPLOYER_PRIVATE_KEY = process.env.DEPLOYER_PRIVATE_KEY;
-const accounts = DEPLOYER_PRIVATE_KEY ? [DEPLOYER_PRIVATE_KEY] : [];
+const DEPLOYER_MNEMONIC = process.env.DEPLOYER_MNEMONIC;
+const accounts = DEPLOYER_PRIVATE_KEY
+  ? [DEPLOYER_PRIVATE_KEY]
+  : DEPLOYER_MNEMONIC
+    ? { mnemonic: DEPLOYER_MNEMONIC, count: 1 }
+    : [];
 
 // One Etherscan v2 key covers every supported explorer (eth, bsc, arbitrum, base, ...).
 // Get it at https://etherscan.io/myapikey. A single string => v2 unified endpoint.
@@ -21,7 +27,11 @@ const config: HardhatUserConfig = {
       evmVersion: "prague",
       optimizer: {
         enabled: true,
-        runs: 10,
+        // Runtime-optimised: the delegate runs on every user transaction, while the deployment
+        // cost is paid once per chain. Frozen after the first production deployment — the CREATE2
+        // addresses depend on the exact bytecode, so changing this (or any contract source) moves
+        // every address; a new set goes under a new CREATE2_SALT namespace instead.
+        runs: 1_000_000,
       },
     },
   },
@@ -33,7 +43,7 @@ const config: HardhatUserConfig = {
 
     // ── Mainnets ──
     mainnet: {
-      url: process.env.ETH_RPC_URL ?? "https://eth.llamarpc.com",
+      url: process.env.ETH_RPC_URL ?? "https://ethereum-rpc.publicnode.com",
       chainId: 1,
       accounts,
     },
@@ -77,6 +87,10 @@ const config: HardhatUserConfig = {
   },
   etherscan: {
     apiKey: ETHERSCAN_API_KEY,
+  },
+  // Second, key-less verification target; `yarn verify` submits to both.
+  sourcify: {
+    enabled: true,
   },
   abiExporter: [
     {

@@ -13,5 +13,9 @@ typechain-types
 cache
 artifacts
 
+# dev-network deployment manifests (production ones are committed)
+deployments/hardhat.json
+deployments/localhost.json
+
 /abi/
 .DS_Store

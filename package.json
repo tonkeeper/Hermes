@@ -12,6 +12,7 @@
     "coverage": "yarn hardhat clean; yarn hardhat coverage",
     "size": "yarn hardhat size-contracts",
     "test:lh": "yarn hardhat test --network localhost",
+    "predict": "yarn hardhat run scripts/predict.ts",
     "deploy": "yarn hardhat run scripts/deployer.ts --network",
     "verify": "yarn hardhat run scripts/verify.ts --network",
     "deploy:lh": "yarn hardhat run scripts/deployer.ts --network localhost",

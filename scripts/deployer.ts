@@ -5,8 +5,10 @@ import {
   CREATE2_FACTORY_RUNTIME_CODE,
   SALT_NAMESPACE,
   SALTS,
+  compilerSettings,
   computeCreate2Address,
   getInitCode,
+  gitCommit,
   saveDeployment,
   type ContractDeployment,
   type DeploymentRecord,
@@ -24,8 +26,15 @@ import {
  * well. The script is idempotent: a contract already present at its predicted
  * address is skipped.
  *
+ *   yarn predict                 addresses of the current build, no transactions
  *   yarn deploy <network>        e.g. yarn deploy sepolia / yarn deploy bsc
+ *
+ * A production deployment must be reproducible from a commit, so the script refuses
+ * to run against a real network from a tree with uncommitted changes (ALLOW_DIRTY=1
+ * overrides). The manifest records the commit and the compiler settings.
  */
+
+const DEV_NETWORKS = ["hardhat", "localhost"];
 
 async function ensureFactory(): Promise<void> {
   const code = await ethers.provider.getCode(CREATE2_FACTORY);
@@ -81,10 +90,24 @@ async function main(): Promise<void> {
 
   const net = await ethers.provider.getNetwork();
   const balance = await ethers.provider.getBalance(deployer.address);
+  const { hash: commitHash, dirty } = gitCommit();
+  const compiler = compilerSettings();
+  const isDev = DEV_NETWORKS.includes(network.name);
+
+  if (dirty && !isDev && !process.env.ALLOW_DIRTY) {
+    throw new Error(
+      "The working tree has uncommitted changes. A production deployment must be reproducible " +
+        "from a commit: commit first, or set ALLOW_DIRTY=1 to override."
+    );
+  }
 
   console.log(`Network:   ${network.name} (chainId ${net.chainId})`);
   console.log(`Deployer:  ${deployer.address}`);
   console.log(`Balance:   ${ethers.formatEther(balance)} ETH`);
+  console.log(`Build:     ${commitHash}${dirty ? " (uncommitted changes)" : ""}`);
+  console.log(
+    `Compiler:  solc ${compiler.solc}, optimizer runs ${compiler.optimizerRuns}, viaIR ${compiler.viaIR}, ${compiler.evmVersion}`
+  );
   console.log(`Salt:      "${SALT_NAMESPACE}"\n`);
 
   await ensureFactory();
@@ -115,6 +138,8 @@ async function main(): Promise<void> {
     deployer: deployer.address,
     create2Factory: CREATE2_FACTORY,
     saltNamespace: SALT_NAMESPACE,
+    commit: dirty ? `${commitHash}-dirty` : commitHash,
+    compiler,
     contracts: { HermesV1: hermes, HermesDelegateV1: delegate },
     timestamp: new Date().toISOString(),
   };

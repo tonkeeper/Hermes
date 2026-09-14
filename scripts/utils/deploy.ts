@@ -1,4 +1,5 @@
-import { ethers, artifacts, network } from "hardhat";
+import { ethers, artifacts, network, config } from "hardhat";
+import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 
@@ -23,8 +24,13 @@ export const CREATE2_FACTORY_RUNTIME_CODE =
  * Namespace mixed into every salt. Override via env to grind a vanity address or
  * to deploy an isolated parallel set. MUST be identical across chains for the
  * resulting addresses to match.
+ *
+ * "Hermes.v1" is retired: it names a pair built with `optimizer.runs = 10` that exists
+ * on Ethereum mainnet only (HermesV1 0x3f7DBb097ecd4F35Aa26af9D6f58F8cBF83E4536,
+ * HermesDelegateV1 0xD1c44e466B70002AC54fB727eD7CbE8F92c782f1). The production set is
+ * "Hermes.v1.0.0", built with the settings in hardhat.config.ts.
  */
-export const SALT_NAMESPACE = process.env.CREATE2_SALT ?? "Hermes.v1";
+export const SALT_NAMESPACE = process.env.CREATE2_SALT ?? "Hermes.v1.0.0";
 
 /** Per-contract CREATE2 salts. Derived deterministically from the namespace. */
 export const SALTS = {
@@ -46,12 +52,23 @@ export interface ContractDeployment {
   txHash?: string;
 }
 
+export interface CompilerSettings {
+  solc: string;
+  optimizerRuns: number;
+  viaIR: boolean;
+  evmVersion: string;
+}
+
 export interface DeploymentRecord {
   network: string;
   chainId: string;
   deployer: string;
   create2Factory: string;
   saltNamespace: string;
+  /** Git commit the build was made from; `-dirty` if the tree had uncommitted changes. */
+  commit: string;
+  /** What produced the init code — with `commit`, enough to rebuild it byte for byte. */
+  compiler: CompilerSettings;
   contracts: {
     HermesV1: ContractDeployment;
     HermesDelegateV1: ContractDeployment;
@@ -85,11 +102,36 @@ export function computeCreate2Address(salt: string, initCode: string): string {
   return ethers.getCreate2Address(CREATE2_FACTORY, salt, ethers.keccak256(initCode));
 }
 
-/** Full init code = creation bytecode ++ abi-encoded constructor args. */
+/**
+ * Full init code = creation bytecode ++ abi-encoded constructor args. Built from the
+ * artifact alone, so it needs no signer and works on a network without accounts.
+ */
 export async function getInitCode(contractName: string, args: any[] = []): Promise<string> {
-  // readArtifact ensures the contract is compiled and surfaces a clear error otherwise.
-  await artifacts.readArtifact(contractName);
-  const factory = await ethers.getContractFactory(contractName);
-  const tx = await factory.getDeployTransaction(...args);
-  return ethers.hexlify(tx.data);
+  const artifact = await artifacts.readArtifact(contractName);
+  const encodedArgs = new ethers.Interface(artifact.abi).encodeDeploy(args);
+  return ethers.concat([artifact.bytecode, encodedArgs]);
+}
+
+/** HEAD commit of the checkout the script runs from, flagged when the tree is not clean. */
+export function gitCommit(): { hash: string; dirty: boolean } {
+  const run = (cmd: string) => execSync(cmd, { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+  try {
+    const hash = run("git rev-parse HEAD");
+    const dirty = run("git status --porcelain --untracked-files=no") !== "";
+    return { hash, dirty };
+  } catch {
+    return { hash: "unknown", dirty: true };
+  }
+}
+
+/** The compiler settings every network must share for the CREATE2 addresses to match. */
+export function compilerSettings(): CompilerSettings {
+  const compiler = config.solidity.compilers[0];
+  const settings = compiler.settings ?? {};
+  return {
+    solc: compiler.version,
+    optimizerRuns: settings.optimizer?.runs ?? 200,
+    viaIR: Boolean(settings.viaIR),
+    evmVersion: settings.evmVersion ?? "default",
+  };
 }

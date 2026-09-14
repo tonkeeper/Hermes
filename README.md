@@ -72,6 +72,21 @@ yarn test:lh          # run the tests against it
 
 Tests live in [`test/`](test): [`HermesDelegateV1.test.ts`](test/HermesDelegateV1.test.ts) covers the three flows, ERC-1271 and the EIP-712 encoding against reference implementations; [`GasComparison.test.ts`](test/GasComparison.test.ts) benchmarks the execution paths.
 
+## Deployment
+
+Both contracts are deployed through the canonical CREATE2 proxy (`0x4e59b44847b379578588920cA78FbF26c0B4956C`, pre-deployed on every supported chain) with a fixed salt, so they land at the same addresses on every network regardless of which key pays for the deployment. `HermesV1` goes first; its address is the constructor argument of `HermesDelegateV1`, so the delegate's init code — and therefore its address — is identical everywhere too.
+
+The addresses depend on the exact init code. **After the first production deployment neither the contract sources nor the compiler settings in `hardhat.config.ts` may change**: a new build lands at new addresses, and a new set is deployed next to the old one under a new salt namespace (`CREATE2_SALT`), never on top of it.
+
+```bash
+cp .env.example .env   # DEPLOYER_PRIVATE_KEY (one key for every network), ETHERSCAN_API_KEY
+yarn predict           # the addresses this build lands at — no transactions
+yarn deploy bsc        # deploy (idempotent: a contract already at its address is skipped); writes deployments/bsc.json
+yarn verify bsc        # verify on the chain's Etherscan-family explorer (one v2 key covers all) and on Sourcify
+```
+
+Networks: `mainnet`, `bsc`, `arbitrumOne`, `base`, and the testnets `sepolia`, `bscTestnet`, `arbitrumSepolia`, `baseSepolia`. The deploy script refuses to run against a real network from a tree with uncommitted changes. `deployments/<network>.json` records the addresses, salts, init-code hashes, the git commit and the compiler settings of every production deployment and is committed to the repository; equal init-code hashes across those files are the proof that the addresses match by construction.
+
 ## License
 
 [Apache License 2.0](LICENSE).
