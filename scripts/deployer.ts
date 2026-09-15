@@ -55,6 +55,18 @@ async function ensureFactory(): Promise<void> {
   );
 }
 
+const CODE_POLL_ATTEMPTS = 15;
+const CODE_POLL_DELAY_MS = 2_000;
+
+/** True once `getCode(address)` returns code, polling a few times for lagging RPC nodes. */
+async function waitForCode(address: string): Promise<boolean> {
+  for (let attempt = 1; attempt <= CODE_POLL_ATTEMPTS; attempt++) {
+    if ((await ethers.provider.getCode(address)) !== "0x") return true;
+    await new Promise((resolve) => setTimeout(resolve, CODE_POLL_DELAY_MS));
+  }
+  return false;
+}
+
 async function deployDeterministic(
   deployer: Signer,
   contractName: string,
@@ -73,11 +85,19 @@ async function deployDeterministic(
   // Arachnid proxy ABI is implicit: calldata = salt (32 bytes) ++ initCode.
   const tx = await deployer.sendTransaction({ to: CREATE2_FACTORY, data: ethers.concat([salt, initCode]) });
   const receipt = await tx.wait();
-
-  if ((await ethers.provider.getCode(address)) === "0x") {
-    throw new Error(`${contractName} deployment reverted: no code at predicted address ${address}`);
+  if (receipt === null || receipt.status !== 1) {
+    throw new Error(`${contractName} deployment reverted (tx ${tx.hash}); no code at predicted address ${address}`);
   }
-  console.log(`  ${contractName.padEnd(16)} deployed at ${address}  (tx ${receipt?.hash})`);
+
+  // Public RPCs are load-balanced: a node behind the one that mined the block can still answer
+  // "0x" for a moment. The receipt above is the source of truth; poll until the code shows up.
+  if (!(await waitForCode(address))) {
+    throw new Error(
+      `${contractName}: tx ${tx.hash} succeeded but no code is visible yet at ${address} — ` +
+        `re-run the script once the RPC has caught up (existing contracts are skipped)`
+    );
+  }
+  console.log(`  ${contractName.padEnd(16)} deployed at ${address}  (tx ${receipt.hash})`);
   console.log(`  ${"".padEnd(16)} initCodeHash ${initCodeHash}`);
   return { address, salt, args, initCodeHash, txHash: receipt?.hash };
 }
