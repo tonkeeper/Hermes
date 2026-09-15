@@ -88,9 +88,11 @@ const config: HardhatUserConfig = {
   etherscan: {
     apiKey: ETHERSCAN_API_KEY,
   },
-  // Second, key-less verification target; `yarn verify` submits to both.
+  // hardhat-verify 2.1.x talks to a Sourcify endpoint that no longer exists (the request
+  // fails after the explorer step and aborts the script), so Sourcify is submitted
+  // separately through its v2 API instead of here.
   sourcify: {
-    enabled: true,
+    enabled: false,
   },
   abiExporter: [
     {
