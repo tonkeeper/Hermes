@@ -1,0 +1,33 @@
+{
+  "network": "bsc",
+  "chainId": "56",
+  "deployer": "0x1544a551b49e7f5c109260430A3e80Bf3E3876aa",
+  "create2Factory": "0x4e59b44847b379578588920cA78FbF26c0B4956C",
+  "saltNamespace": "Hermes.v1.0.0",
+  "commit": "5f4c00f538500997395dde27dde72a02bb5e976b",
+  "compiler": {
+    "solc": "0.8.35",
+    "optimizerRuns": 1000000,
+    "viaIR": true,
+    "evmVersion": "prague"
+  },
+  "contracts": {
+    "HermesV1": {
+      "address": "0x79ffaCa44dC6A7aAC1ad0239e398D652317b167B",
+      "salt": "0xef25ce3a1ab0a1a1c9685d775ac277ea23e0e5ecc34c4aea058a0e7339aabff0",
+      "args": [],
+      "initCodeHash": "0x13e91bc62c036c55189df1c4a666c0b6224789914b8bc6286eb99599081d5a6e",
+      "txHash": "0x584777b821ad57451df731440938ee7427762ee8dbe26cc8f28fa04cdf5bced6"
+    },
+    "HermesDelegateV1": {
+      "address": "0x24b576BC271823bF9C24BE627B4363b9b00191e9",
+      "salt": "0x5b8c33108b6e1abf7d1d89c45b6c61f17178741db967c7e811aca207237d18bd",
+      "args": [
+        "0x79ffaCa44dC6A7aAC1ad0239e398D652317b167B"
+      ],
+      "initCodeHash": "0x593dba87a3ab552e5d5ba9d6003bedf8f15873456c10f81970b32015a9f57548",
+      "txHash": "0x8570f9686e64b58edc18d794884b7a3c118148e585c1efe9c9364ce736b3c6cf"
+    }
+  },
+  "timestamp": "2026-09-15T06:51:41.954Z"
+}

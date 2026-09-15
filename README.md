@@ -85,6 +85,17 @@ yarn deploy bsc        # deploy (idempotent: a contract already at its address i
 yarn verify bsc        # verify on the chain's Etherscan-family explorer (one v2 key covers all) and on Sourcify
 ```
 
+### Deployed contracts (v1.0.0)
+
+The same two addresses on every supported chain — salt namespace `Hermes.v1.0.0`, solc 0.8.35, optimizer runs 1 000 000, viaIR, Prague:
+
+| Contract | Address | Ethereum | BSC | Arbitrum One | Base |
+| --- | --- | --- | --- | --- | --- |
+| `HermesV1` | `0x79ffaCa44dC6A7aAC1ad0239e398D652317b167B` | [etherscan](https://etherscan.io/address/0x79ffaCa44dC6A7aAC1ad0239e398D652317b167B#code) | [bscscan](https://bscscan.com/address/0x79ffaCa44dC6A7aAC1ad0239e398D652317b167B#code) | [arbiscan](https://arbiscan.io/address/0x79ffaCa44dC6A7aAC1ad0239e398D652317b167B#code) | [basescan](https://basescan.org/address/0x79ffaCa44dC6A7aAC1ad0239e398D652317b167B#code) |
+| `HermesDelegateV1` | `0x24b576BC271823bF9C24BE627B4363b9b00191e9` | [etherscan](https://etherscan.io/address/0x24b576BC271823bF9C24BE627B4363b9b00191e9#code) | [bscscan](https://bscscan.com/address/0x24b576BC271823bF9C24BE627B4363b9b00191e9#code) | [arbiscan](https://arbiscan.io/address/0x24b576BC271823bF9C24BE627B4363b9b00191e9#code) | [basescan](https://basescan.org/address/0x24b576BC271823bF9C24BE627B4363b9b00191e9#code) |
+
+Source verified on each explorer; transaction hashes, init-code hashes and the build commit are in [`deployments/`](deployments).
+
 Networks: `mainnet`, `bsc`, `arbitrumOne`, `base`, and the testnets `sepolia`, `bscTestnet`, `arbitrumSepolia`, `baseSepolia`. The deploy script refuses to run against a real network from a tree with uncommitted changes. `deployments/<network>.json` records the addresses, salts, init-code hashes, the git commit and the compiler settings of every production deployment and is committed to the repository; equal init-code hashes across those files are the proof that the addresses match by construction.
 
 ## License
