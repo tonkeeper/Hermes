@@ -96,7 +96,7 @@ The same two addresses on every supported chain — salt namespace `Hermes.v1.0.
 
 Source verified on each explorer; transaction hashes, init-code hashes and the build commit are in [`deployments/`](deployments).
 
-Networks: `mainnet`, `bsc`, `arbitrumOne`, `base`, and the testnets `sepolia`, `bscTestnet`, `arbitrumSepolia`, `baseSepolia`. The deploy script refuses to run against a real network from a tree with uncommitted changes. `deployments/<network>.json` records the addresses, salts, init-code hashes, the git commit and the compiler settings of every production deployment and is committed to the repository; equal init-code hashes across those files are the proof that the addresses match by construction.
+Networks: `mainnet`, `bsc`, `arbitrumOne`, `base`, `avalanche`, `polygon`, `robinhood` (Robinhood Chain, 4663), and the testnets `sepolia`, `bscTestnet`, `arbitrumSepolia`, `baseSepolia`. The deploy script refuses to run against a real network from a tree with uncommitted changes. `deployments/<network>.json` records the addresses, salts, init-code hashes, the git commit and the compiler settings of every production deployment and is committed to the repository; equal init-code hashes across those files are the proof that the addresses match by construction.
 
 ## License
 

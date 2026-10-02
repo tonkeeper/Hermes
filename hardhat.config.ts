@@ -15,7 +15,7 @@ const accounts = DEPLOYER_PRIVATE_KEY
     ? { mnemonic: DEPLOYER_MNEMONIC, count: 1 }
     : [];
 
-// One Etherscan v2 key covers every supported explorer (eth, bsc, arbitrum, base, ...).
+// One Etherscan v2 key covers every supported explorer (eth, bsc, arbitrum, base, avalanche, polygon, robinhood, ...).
 // Get it at https://etherscan.io/myapikey. A single string => v2 unified endpoint.
 const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY ?? "";
 
@@ -62,6 +62,22 @@ const config: HardhatUserConfig = {
       chainId: 8453,
       accounts,
     },
+    avalanche: {
+      url: process.env.AVALANCHE_RPC_URL ?? "https://api.avax.network/ext/bc/C/rpc",
+      chainId: 43114,
+      accounts,
+    },
+    polygon: {
+      url: process.env.POLYGON_RPC_URL ?? "https://polygon.drpc.org",
+      chainId: 137,
+      accounts,
+    },
+    // Robinhood Chain (Arbitrum Orbit L2, ETH gas). The public RPC is rate-limited.
+    robinhood: {
+      url: process.env.ROBINHOOD_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
+      chainId: 4663,
+      accounts,
+    },
 
     // ── Testnets ──
     sepolia: {
@@ -87,6 +103,18 @@ const config: HardhatUserConfig = {
   },
   etherscan: {
     apiKey: ETHERSCAN_API_KEY,
+    // Chains hardhat-verify does not know yet. With a single v2 key every request goes to the
+    // unified Etherscan v2 endpoint (by chainid), so only browserURL is used from here.
+    customChains: [
+      {
+        network: "robinhood",
+        chainId: 4663,
+        urls: {
+          apiURL: "https://api.etherscan.io/v2/api?chainid=4663",
+          browserURL: "https://robin.etherscan.io",
+        },
+      },
+    ],
   },
   // hardhat-verify 2.1.x talks to a Sourcify endpoint that no longer exists (the request
   // fails after the explorer step and aborts the script), so Sourcify is submitted
