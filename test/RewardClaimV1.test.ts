@@ -171,6 +171,33 @@ describe("RewardClaimV1 (signed reward claims)", () => {
             .to.be.revertedWithCustomError(rewards, "InvalidSignature");
     });
 
+    it("rejects a 64-byte compact signature: only r‖s‖v is accepted", async () => {
+        const { backend, user, rewards } = await setup();
+        const claim = await newClaim(user.address);
+        const { signature } = await signClaim(rewards, backend, claim);
+        const compact = ethers.Signature.from(signature).compactSerialized;
+
+        expect(ethers.dataLength(compact)).to.equal(64);
+        await expect(rewards.connect(user).claim(claim.amount, claim.claimId, claim.deadline, compact))
+            .to.be.revertedWithCustomError(rewards, "InvalidSignature");
+    });
+
+    it("verifies with ecrecover alone: code at the signer address changes nothing", async () => {
+        const { backend, user, lit, rewards } = await setup();
+        const claim = await newClaim(user.address);
+        const tx = await signClaim(rewards, backend, claim);
+
+        // Stand-in for an EIP-7702 delegation or any other code landing on the backend key.
+        await ethers.provider.send("hardhat_setCode", [backend.address, "0x00"]);
+        try {
+            expect(await ethers.provider.getCode(backend.address)).to.not.equal("0x");
+            await expect(user.sendTransaction(tx)).to.emit(rewards, "Claimed");
+            expect(await lit.balanceOf(user.address)).to.equal(AMOUNT);
+        } finally {
+            await ethers.provider.send("hardhat_setCode", [backend.address, "0x"]);
+        }
+    });
+
     it("leaves the claimId unspent when the pool is short", async () => {
         const { deployer, backend, user, lit, rewards } = await setup();
         const claim = await newClaim(user.address, POOL + 1n);

@@ -3,8 +3,8 @@ pragma solidity 0.8.35;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {EIP712} from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
-import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 
 /**
  * @title RewardClaimV1 - Pays out loyalty rewards in one ERC20 token against a backend-signed proof.
@@ -32,6 +32,9 @@ import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/Signa
  *        left of the pool, the backend signs a claim for its own address and sends it. A leaked
  *        signer key exposes the whole pool, so the backend drains it the same way and a new
  *        deployment takes over with a new key. Tokens other than `token` sent here are lost.
+ *      - **Plain ECDSA.** `signer` is an EOA key and a proof is its 65-byte `r‖s‖v` signature over
+ *        the EIP-712 digest, checked with `ecrecover` alone. There is no ERC-1271 path, so code at
+ *        the signer address (an EIP-7702 delegation, say) neither enables nor breaks verification.
  *      - **A failed transfer spends nothing.** If the pool is short, `claim` reverts and the
  *        `claimId` stays unspent; the same proof works again once the pool is topped up.
  *
@@ -80,7 +83,8 @@ contract RewardClaimV1 is EIP712 {
      * @param amount The reward amount, in token units.
      * @param claimId The backend's unique id of this prize.
      * @param deadline The last timestamp at which the proof is valid.
-     * @param signature The backend's EIP-712 signature over `Claim(msg.sender, amount, claimId, deadline)`.
+     * @param signature The backend's 65-byte ECDSA signature over the EIP-712 digest of
+     *                  `Claim(msg.sender, amount, claimId, deadline)`.
      */
     function claim(
         uint256 amount,
@@ -97,7 +101,8 @@ contract RewardClaimV1 is EIP712 {
         }
 
         bytes32 digest = hashClaim(msg.sender, amount, claimId, deadline);
-        if (!SignatureChecker.isValidSignatureNow(signer, digest, signature)) {
+        (address recovered, ECDSA.RecoverError err, ) = ECDSA.tryRecoverCalldata(digest, signature);
+        if (err != ECDSA.RecoverError.NoError || recovered != signer) {
             revert InvalidSignature();
         }
 
